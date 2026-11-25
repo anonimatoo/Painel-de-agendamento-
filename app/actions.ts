@@ -14,6 +14,7 @@ import { connectWhatsApp, logoutWhatsApp, sendWhatsApp, whatsAppStatus } from '@
 import { refundAppointment } from '@/lib/connect'
 import { stripe } from '@/lib/stripe'
 import { allowAttempt, consumeAccountToken, mailConfigured, sendAccountLink } from '@/lib/account-security'
+import { finishMfaSetup, startMfaSetup, verifyMfa } from '@/lib/mfa'
 import { uploadCover } from '@/lib/storage'
 
 const title = z.string().trim().min(2).max(100)
@@ -53,8 +54,14 @@ export async function account(action: 'login' | 'register', form: FormData) {
     if (action === 'login') {
       const user = await db.user.findUnique({ where: { email: data.email } })
       if (!(await verifyPassword(data.password, user?.password)) || !user) throw new AgendaError('E-mail ou senha inválidos.')
+      if (user.platformAdmin && user.mfaSecret) {
+        const code = z.string().trim().max(6).parse(form.get('code') ?? '')
+        if (!(await verifyMfa(user, code))) throw new AgendaError('Informe um código válido do seu aplicativo autenticador.')
+        await startSession(user.id, true)
+        return '/super-admin'
+      }
       await startSession(user.id)
-      return user.platformAdmin ? '/super-admin' : '/dashboard'
+      return user.platformAdmin ? '/conta' : '/dashboard'
     }
     const { business, link } = z.object({ business: title, link: slug }).parse(Object.fromEntries(form))
     const user = await db.user.create({ data: {
@@ -96,6 +103,31 @@ export async function accountLink(operation: 'request' | 'reset' | 'resend' | 'v
       await sendAccountLink(user, 'EMAIL_VERIFY')
     }
     return '/conta?solicitado=1'
+  }, '/conta')
+}
+
+export async function setupMfa(_previous: { message?: string; secret?: string }, form: FormData): Promise<{ message?: string; secret?: string }> {
+  try {
+    const user = await userSession()
+    if (!user?.platformAdmin || user.mfaSecret || !(await allowAttempt('mfa-setup', user.id, 8, 600))) {
+      return { message: 'Esta operação está indisponível agora.' }
+    }
+    const password = credentials.shape.password.parse(form.get('password'))
+    if (!(await verifyPassword(password, user.password))) return { message: 'Não foi possível confirmar sua senha.' }
+    return { secret: await startMfaSetup(user.id) }
+  } catch {
+    return { message: 'Não foi possível iniciar a autenticação em duas etapas.' }
+  }
+}
+
+export async function activateMfa(form: FormData) {
+  await perform(async () => {
+    const user = await userSession()
+    if (!user?.platformAdmin || user.mfaSecret || !(await allowAttempt('mfa-activate', user.id, 10, 600))) return '/conta'
+    const code = z.string().trim().regex(/^\d{6}$/).parse(form.get('code'))
+    if (!(await finishMfaSetup(user.id, code))) throw new AgendaError('Confira o código ou gere uma nova chave.')
+    await startSession(user.id, true)
+    return '/super-admin'
   }, '/conta')
 }
 
@@ -296,6 +328,7 @@ export async function admin(operation: 'plan' | 'suspend' | 'whatsapp' | 'stripe
   await perform(async () => {
     const user = await userSession()
     if (!user?.platformAdmin) return '/login'
+    if (!user.adminMfaVerified) return user.mfaSecret ? '/login' : '/conta'
     const body = Object.fromEntries(form)
     if (operation === 'stripe-config' || operation === 'stripe-test') {
       const password = credentials.shape.password.parse(form.get('password'))

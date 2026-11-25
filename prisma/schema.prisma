@@ -23,6 +23,8 @@ model User {
   password String
   platformAdmin Boolean @default(false)
   emailVerifiedAt DateTime?
+  mfaSecret String?
+  mfaCounter Int?
   accountTokens AccountToken[]
   sessions Session[]
   memberships Member[]
@@ -33,6 +35,7 @@ model Session {
   userId String
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
   expiresAt DateTime
+  mfaVerified Boolean @default(false)
   @@index([expiresAt])
 }
 model Tenant {

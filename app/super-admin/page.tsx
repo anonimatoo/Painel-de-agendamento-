@@ -6,7 +6,9 @@ import { admin, logout } from '../actions'
 import { Brand, ErrorNote, Field, brl } from '../ui'
 
 export default async function SuperAdmin({ searchParams }: { searchParams: Promise<{ erro?: string; stripe?: string }> }) {
-  if (!(await userSession())?.platformAdmin) redirect('/login')
+  const user = await userSession()
+  if (!user?.platformAdmin) redirect('/login')
+  if (!user.adminMfaVerified) redirect(user.mfaSecret ? '/login' : '/conta')
   const query = await searchParams
   const [tenants, plans, stripeSettings] = await Promise.all([
     db.tenant.findMany({ orderBy: { createdAt: 'desc' }, take: 100, include: { subscriptions: { include: { plan: true } } } }),

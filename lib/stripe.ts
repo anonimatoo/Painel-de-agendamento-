@@ -19,8 +19,8 @@ export async function applyEvent(event: Stripe.Event, client?: Stripe) {
 
     if (event.account && ['checkout.session.completed', 'checkout.session.async_payment_succeeded', 'checkout.session.expired', 'checkout.session.async_payment_failed'].includes(event.type)) {
       const session = event.data.object as Stripe.Checkout.Session
-      const expired = event.type === 'checkout.session.expired' || event.type === 'checkout.session.async_payment_failed'
-      await settleAppointment(tx, event.account, session, event.type === 'checkout.session.expired' && session.status === 'expired')
+      const expired = event.type === 'checkout.session.expired' && session.status === 'expired'
+      await settleAppointment(tx, event.account, session, expired)
       await settleOrder(tx, event.account, session, expired)
     }
 

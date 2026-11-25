@@ -39,7 +39,7 @@ export default async function Establishment({ params, searchParams }: {
     where: { tenantId: tenant.id, paymentToken }, select: { status: true, checkoutState: true, expiresAt: true }
   }) : null
   const order = typeof query.pedido === 'string' && query.pedido.length < 100
-    ? await db.shopOrder.findFirst({ where: { id: query.pedido, tenantId: tenant.id }, select: { status: true } }) : null
+    ? await db.shopOrder.findFirst({ where: { id: query.pedido, tenantId: tenant.id }, select: { status: true, paymentReview: true } }) : null
   const purchasable = tenant.stripeAccountId && tenant.products.some(product => (product.promotionCents ?? product.cents) > 0)
   const today = DateTime.now().setZone(tenant.timezone).toISODate()!
   const day = query.dia ?? today
@@ -73,7 +73,7 @@ export default async function Establishment({ params, searchParams }: {
         {paymentToken && payment.status === 'PENDING' && payment.checkoutState !== 'REVIEW' && payment.expiresAt && payment.expiresAt > new Date() &&
           <form action={retryPayment.bind(null, slug, paymentToken)}><button>Continuar pagamento</button></form>}
       </article>}
-      {order && <p className="success" role="status">{order.status === 'PAID' ? 'Pagamento do pedido confirmado. Combine a retirada com o estabelecimento.' : order.status === 'PENDING' ? 'Aguardando confirmação do pagamento do pedido.' : 'Este pedido foi cancelado ou estornado.'}</p>}
+      {order && <p className="success" role="status">{order.paymentReview ? 'O pagamento está em verificação. Consulte o estabelecimento antes de pagar novamente.' : order.status === 'PAID' ? 'Pagamento do pedido confirmado. Combine a retirada com o estabelecimento.' : order.status === 'PENDING' ? 'Aguardando confirmação do pagamento do pedido.' : 'Este pedido foi cancelado ou estornado.'}</p>}
       {query.espera && <p className="success" role="status">Solicitação de lista de espera enviada.</p>}
       {confirmed > 0 && <p className="success" role="status">Seu agendamento foi confirmado.</p>}
       {query.reserva === 'pagamento' && <p className="success" role="status">Seu agendamento será confirmado após a validação do pagamento.</p>}

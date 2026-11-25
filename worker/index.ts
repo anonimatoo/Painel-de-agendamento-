@@ -77,7 +77,7 @@ function tickBilling() {
     .catch(() => console.error('billing-reconciliation-unavailable')).finally(() => { billingPending = undefined })
 }
 function tick() {
-  if (!pending) pending = Promise.all([publishReminders(), reconcileAppointments(), db.shopOrder.count({ where: { status: 'PENDING', expiresAt: { lte: new Date() } } })
+  if (!pending) pending = Promise.all([publishReminders(), reconcileAppointments(), db.shopOrder.count({ where: { status: 'PENDING', paymentReview: false, expiresAt: { lte: new Date() } } })
     .then(async count => { if (count) await reconcileOrders(await stripe()) })]).then(() => undefined).catch(() => console.error('Não foi possível consultar os lembretes.')).finally(() => { pending = undefined })
 }
 const timer = setInterval(tick, 15_000)

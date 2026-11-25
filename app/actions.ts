@@ -13,7 +13,7 @@ import { checkStripeConnection, pauseStripePayments, saveStripeConfiguration, st
 import { subscriptionCheckout } from '@/lib/billing'
 import { instanceName, provisionWhatsApp, removeWhatsApp } from '@/lib/whatsapp'
 import { connectWhatsApp, logoutWhatsApp, sendWhatsApp, whatsAppStatus } from '@/lib/evolution'
-import { reserveOrder } from '@/lib/orders'
+import { reconcileOrder, reserveOrder } from '@/lib/orders'
 import { openAppointmentCheckout, reconcileAppointment, refundAppointment, refundOrder } from '@/lib/connect'
 import { stripe } from '@/lib/stripe'
 import { allowAttempt, consumeAccountToken, mailConfigured, sendAccountLink } from '@/lib/account-security'
@@ -283,7 +283,7 @@ export async function brandSettings(operation: 'profile' | 'upload' | 'delete', 
   }, '/personalizacao')
 }
 
-export async function commerce(operation: 'product' | 'stock' | 'sale' | 'reverse' | 'entry' | 'settle' | 'refund-order', form: FormData) {
+export async function commerce(operation: 'product' | 'stock' | 'sale' | 'reverse' | 'entry' | 'settle' | 'refund-order' | 'review-order', form: FormData) {
   await perform(async () => {
     const user = await userSession()
     if (!user) return '/login'
@@ -312,6 +312,11 @@ export async function commerce(operation: 'product' | 'stock' | 'sale' | 'revers
       await changeStock({ tenantId, ...values, sale: operation === 'sale' })
     } else if (operation === 'reverse') {
       await reverseSale(tenantId, id.parse(body.id))
+    } else if (operation === 'review-order') {
+      const order = await db.shopOrder.findFirst({ where: { id: id.parse(body.id), tenantId, status: 'PENDING' } })
+      if (!order || !member.tenant.stripeAccountId) throw new AgendaError('Pedido indisponível para consulta.')
+      if (!(await allowAttempt('review-order', tenantId, 30, 600))) throw new AgendaError('Aguarde antes de consultar outro pedido.')
+      await reconcileOrder(order, member.tenant.stripeAccountId, await stripe())
     } else if (operation === 'refund-order') {
       if (member.role !== 'ADMIN') throw new AgendaError('Seu acesso não permite esta operação.')
       await refundOrder(tenantId, id.parse(body.id))

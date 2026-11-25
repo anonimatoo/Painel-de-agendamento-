@@ -72,7 +72,8 @@ export default async function CommercePage({ searchParams }: { searchParams: Pro
     </article>
     <article><h2>Pedidos para retirada</h2>{orders.length ? <ul>{orders.map(order => <li key={order.id}>
       {date(order.createdAt)} · {order.customerName} · +{order.phone} · {brl(order.cents)} ·
-      {' '}{order.status === 'PAID' ? 'Pago' : order.status === 'PENDING' ? 'Aguardando pagamento' : order.status === 'REFUNDED' ? 'Estornado' : 'Cancelado'}
+      {' '}{order.paymentReview ? 'Em verificação' : order.status === 'PAID' ? 'Pago' : order.status === 'PENDING' ? 'Aguardando pagamento' : order.status === 'REFUNDED' ? 'Estornado' : 'Cancelado'}
+      {order.status === 'PENDING' && <form action={commerce.bind(null, 'review-order')}><input name="id" type="hidden" value={order.id} /><button className="outline">Consultar pagamento</button></form>}
       {member.role === 'ADMIN' && order.status === 'PAID' && <form action={commerce.bind(null, 'refund-order')}>
         <input type="hidden" name="id" value={order.id} /><button className="outline">Estornar pedido e repor estoque</button>
       </form>}

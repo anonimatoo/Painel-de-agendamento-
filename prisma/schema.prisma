@@ -422,6 +422,7 @@ model ShopOrder {
   cents Int
   platformFeeCents Int @default(0)
   status OrderStatus @default(PENDING)
+  paymentReview Boolean @default(false)
   checkoutId String? @unique
   paymentIntentId String? @unique
   expiresAt DateTime

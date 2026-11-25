@@ -1,4 +1,4 @@
-import type { Prisma } from '@prisma/client'
+import type { Prisma, ShopOrder } from '@prisma/client'
 import type Stripe from 'stripe'
 import { AgendaError } from './agenda'
 import { platformFee } from './commission'
@@ -42,7 +42,7 @@ export async function reserveOrder(input: { tenantId: string; requestId: string;
 }
 
 export async function cancelOrder(tx: Prisma.TransactionClient, tenantId: string, id: string) {
-  const changed = await tx.shopOrder.updateMany({ where: { tenantId, id, status: 'PENDING' }, data: { status: 'CANCELED' } })
+  const changed = await tx.shopOrder.updateMany({ where: { tenantId, id, status: 'PENDING' }, data: { status: 'CANCELED', paymentReview: false } })
   if (!changed.count) return
   const items = await tx.shopOrderItem.findMany({ where: { tenantId, orderId: id }, orderBy: { productId: 'asc' } })
   for (const item of items) {
@@ -53,39 +53,52 @@ export async function cancelOrder(tx: Prisma.TransactionClient, tenantId: string
 export async function settleOrder(tx: Prisma.TransactionClient, account: string, session: Stripe.Checkout.Session, expired: boolean) {
   const orderId = session.metadata?.orderId
   if (!orderId) return
-  const order = await tx.shopOrder.findFirst({ where: { id: orderId, status: 'PENDING', tenant: { stripeAccountId: account } } })
+  const order = await tx.shopOrder.findFirst({ where: { id: orderId, status: { in: ['PENDING', 'CANCELED'] }, tenant: { stripeAccountId: account } } })
   if (!order || order.checkoutId && order.checkoutId !== session.id) return
+  if (order.status === 'CANCELED') {
+    if (session.payment_status === 'paid') await tx.shopOrder.updateMany({
+      where: { id: order.id, status: 'CANCELED' }, data: { paymentReview: true, checkoutId: session.id }
+    })
+    return
+  }
   if (session.payment_status === 'paid' && session.currency === 'brl' && session.amount_total === order.cents) {
     const paymentIntentId = typeof session.payment_intent === 'string' ? session.payment_intent : session.payment_intent?.id
     await tx.shopOrder.updateMany({
       where: { id: order.id, status: 'PENDING' },
-      data: { status: 'PAID', paidAt: new Date(), paymentIntentId, checkoutId: session.id }
+      data: { status: 'PAID', paymentReview: false, paidAt: new Date(), paymentIntentId, checkoutId: session.id }
     })
   } else if (expired && session.payment_status !== 'paid') {
     await cancelOrder(tx, order.tenantId, order.id)
   }
 }
 
+export async function reconcileOrder(order: ShopOrder, account: string, api: Stripe) {
+  let session: Stripe.Checkout.Session | undefined = order.checkoutId ? await api.checkout.sessions.retrieve(order.checkoutId, { stripeAccount: account }) : undefined
+  if (!session) {
+    for await (const candidate of api.checkout.sessions.list({
+      created: { gte: Math.floor(+order.createdAt / 1000) - 10 }, limit: 100
+    }, { stripeAccount: account })) {
+      if (candidate.metadata?.orderId === order.id) { session = candidate; break }
+    }
+  }
+  if (session && (session.payment_status === 'paid' || session.status === 'expired')) {
+    const evidence = session
+    await db.$transaction(tx => settleOrder(tx, account, evidence, evidence.status === 'expired'))
+  } else if (Date.now() >= +order.expiresAt) {
+    await db.shopOrder.updateMany({ where: { id: order.id, status: 'PENDING' }, data: { paymentReview: true } })
+  }
+}
+
 export async function reconcileOrders(api: Stripe) {
   const due = await db.shopOrder.findMany({
-    where: { status: 'PENDING', expiresAt: { lte: new Date() } },
+    where: { status: 'PENDING', paymentReview: false, expiresAt: { lte: new Date() } },
     include: { tenant: { select: { stripeAccountId: true } } }, take: 25, orderBy: { expiresAt: 'asc' }
   })
   for (const order of due) {
     const account = order.tenant.stripeAccountId
     if (!account) continue
     try {
-      let session: Stripe.Checkout.Session | undefined = order.checkoutId ? await api.checkout.sessions.retrieve(order.checkoutId, { stripeAccount: account }) : undefined
-      if (!session) {
-        for await (const candidate of api.checkout.sessions.list({
-          created: { gte: Math.floor(+order.createdAt / 1000) - 10, lte: +order.expiresAt / 1000 }, limit: 100
-        }, { stripeAccount: account })) {
-          if (candidate.metadata?.orderId === order.id) { session = candidate; break }
-        }
-      }
-      const payment = session
-      if (payment) await db.$transaction(tx => settleOrder(tx, account, payment, payment.status === 'expired'))
-      else if (Date.now() - +order.expiresAt > 10 * 60_000) await db.$transaction(tx => cancelOrder(tx, order.tenantId, order.id))
+      await reconcileOrder(order, account, api)
     } catch {
       console.error('order-reconciliation', order.id)
     }

@@ -7,6 +7,7 @@ import { db } from '@/lib/db'
 import { endSession, hashPassword, membership, startSession, userSession, verifyPassword } from '@/lib/auth'
 import { AgendaError, book } from '@/lib/agenda'
 import { stripe } from '@/lib/stripe'
+import { allowAttempt, consumeAccountToken, mailConfigured, sendAccountLink } from '@/lib/account-security'
 import { uploadCover } from '@/lib/storage'
 
 const title = z.string().trim().min(2).max(100)
@@ -40,6 +41,9 @@ async function perform(operation: () => Promise<string>, fallback: string) {
 export async function account(action: 'login' | 'register', form: FormData) {
   await perform(async () => {
     const data = credentials.parse(Object.fromEntries(form))
+    if (!(await allowAttempt(action, data.email, action === 'login' ? 10 : 5, 600))) {
+      throw new AgendaError('Aguarde alguns minutos antes de tentar novamente.')
+    }
     if (action === 'login') {
       const user = await db.user.findUnique({ where: { email: data.email } })
       if (!(await verifyPassword(data.password, user?.password)) || !user) throw new AgendaError('E-mail ou senha inválidos.')
@@ -52,8 +56,41 @@ export async function account(action: 'login' | 'register', form: FormData) {
       memberships: { create: { role: 'ADMIN', tenant: { create: { name: business, slug: link } } } }
     } })
     await startSession(user.id)
+    if (mailConfigured()) await sendAccountLink(user, 'EMAIL_VERIFY').catch(() => console.error('email-verification-delivery'))
     return '/dashboard'
   }, action === 'login' ? '/login' : '/cadastro')
+}
+
+export async function accountLink(operation: 'request' | 'reset' | 'resend' | 'verify' | 'revoke', form: FormData) {
+  await perform(async () => {
+    if (operation === 'request') {
+      const email = credentials.shape.email.parse(form.get('email'))
+      if (await allowAttempt('password-reset', email, 3, 1800)) {
+        const user = await db.user.findUnique({ where: { email } })
+        if (user && mailConfigured()) await sendAccountLink(user, 'PASSWORD_RESET').catch(() => console.error('password-reset-delivery'))
+      }
+      return '/conta?solicitado=1'
+    }
+    if (operation === 'reset' || operation === 'verify') {
+      const token = z.string().max(43).parse(form.get('token'))
+      const password = operation === 'reset' ? credentials.shape.password.parse(form.get('password')) : undefined
+      if (!(await consumeAccountToken(token, operation === 'reset' ? 'PASSWORD_RESET' : 'EMAIL_VERIFY', password))) {
+        throw new AgendaError('Este link expirou ou já foi utilizado. Solicite um novo link.')
+      }
+      return '/login?conta=' + operation
+    }
+    const user = await userSession()
+    if (!user) return '/login'
+    if (operation === 'revoke') {
+      await db.session.deleteMany({ where: { userId: user.id } })
+      await endSession()
+      return '/login'
+    }
+    if (operation === 'resend' && !user.emailVerifiedAt && mailConfigured() && await allowAttempt('verify-email', user.id, 3, 1800)) {
+      await sendAccountLink(user, 'EMAIL_VERIFY')
+    }
+    return '/conta?solicitado=1'
+  }, '/conta')
 }
 
 export async function logout() {
@@ -187,7 +224,10 @@ export async function admin(operation: 'plan' | 'suspend' | 'whatsapp', form: Fo
       await db.tenant.update({ where: { id: data.tenantId }, data: { whatsappInstance: data.instance || null } })
     } else {
       const data = z.object({ tenantId: id, suspended: z.enum(['true', 'false']) }).parse(body)
-      await db.tenant.update({ where: { id: data.tenantId }, data: { suspended: data.suspended === 'true' } })
+      await db.$transaction([
+        db.tenant.update({ where: { id: data.tenantId }, data: { suspended: data.suspended === 'true' } }),
+        db.adminAudit.create({ data: { actorId: user.id, targetId: data.tenantId, action: data.suspended === 'true' ? 'TENANT_SUSPENDED' : 'TENANT_REACTIVATED' } })
+      ])
     }
     return '/super-admin'
   }, '/super-admin')

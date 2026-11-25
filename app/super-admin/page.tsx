@@ -11,7 +11,7 @@ export default async function SuperAdmin({ searchParams }: { searchParams: Promi
     db.tenant.findMany({ orderBy: { createdAt: 'desc' }, take: 100, include: { subscriptions: { include: { plan: true } } } }),
     db.plan.findMany({ orderBy: { monthlyCents: 'asc' } })
   ])
-  return <div className="shell"><aside><Brand /><nav><Link href="/super-admin">Administração</Link><a href="#assinantes">Assinantes</a><a href="#planos">Planos</a></nav><form action={logout}><button className="subtle">Sair</button></form></aside>
+  return <div className="shell"><aside><Brand /><nav><Link href="/super-admin">Administração</Link><a href="#assinantes">Assinantes</a><a href="#planos">Planos</a><Link href="/conta">Minha conta</Link></nav><form action={logout}><button className="subtle">Sair</button></form></aside>
     <main className="content"><h1>Administração da plataforma</h1><ErrorNote error={(await searchParams).erro} />
       <article id="assinantes"><h2>Assinantes</h2>{!tenants.length ? <p>Nenhum estabelecimento cadastrado.</p> : <div className="scroll"><table>
         <thead><tr><th>Estabelecimento</th><th>Acesso</th><th>Assinaturas</th><th>Ação</th><th>WhatsApp</th></tr></thead>

@@ -21,6 +21,8 @@ model User {
   email String @unique
   password String
   platformAdmin Boolean @default(false)
+  emailVerifiedAt DateTime?
+  accountTokens AccountToken[]
   sessions Session[]
   memberships Member[]
   createdAt DateTime @default(now())
@@ -184,4 +186,35 @@ model Reminder {
   claimedAt DateTime?
   @@unique([appointmentId, runAt])
   @@index([sentAt, runAt])
+}
+
+enum TokenPurpose {
+  PASSWORD_RESET
+  EMAIL_VERIFY
+}
+
+model AccountToken {
+  tokenHash String @id
+  purpose TokenPurpose
+  userId String
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  @@unique([userId, purpose])
+  @@index([expiresAt])
+}
+
+model RateLimit {
+  key String @id
+  count Int
+  expiresAt DateTime
+  @@index([expiresAt])
+}
+
+model AdminAudit {
+  id String @id @default(cuid())
+  actorId String
+  action String
+  targetId String
+  createdAt DateTime @default(now())
+  @@index([createdAt])
 }

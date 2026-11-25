@@ -41,7 +41,7 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
       {enabled && desk && <a href="#agenda"><CalendarDays /> Agenda</a>}
       {enabled && manager && <a href="#equipe"><UsersRound /> Equipe e catálogo</a>}
       {enabled && role === 'ADMIN' && <a href="#configuracoes"><Settings /> Configurações</a>}
-    </nav><form action={logout}><button className="subtle">Sair</button></form></aside>
+    <Link href="/conta">Minha conta</Link></nav><form action={logout}><button className="subtle">Sair</button></form></aside>
     <main className="content">
       <div className="row"><div><p className="eyebrow">Estabelecimento</p><h1>{tenant.name}</h1></div>
         {enabled && <Link className="button outline" href={'/estabelecimento/' + tenant.slug}>Ver página pública</Link>}</div>

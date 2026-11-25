@@ -2,6 +2,7 @@ import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { CalendarDays, ClipboardList, Settings, UsersRound, Wallet } from 'lucide-react'
 import { DateTime } from 'luxon'
+import { connectStatus } from '@/lib/connect'
 import { db } from '@/lib/db'
 import { membership, userSession } from '@/lib/auth'
 import { logout, manage } from '../actions'
@@ -22,7 +23,7 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
   const tenantId = tenant.id
   const month = DateTime.now().setZone(tenant.timezone).startOf('month')
   const query = await searchParams
-  const [plans, services, professionals, customers, products, appointments, monthlyCount, paid] = await Promise.all([
+  const [plans, services, professionals, customers, products, appointments, monthlyCount, paid, connect] = await Promise.all([
     role === 'ADMIN' && !enabled ? db.plan.findMany({ where: { active: true } }) : [],
     enabled && manager ? db.service.findMany({ where: { tenantId }, orderBy: { name: 'asc' } }) : [],
     enabled && manager ? db.professional.findMany({ where: { tenantId }, orderBy: { name: 'asc' }, include: { hours: true, assignments: { include: { service: true } } } }) : [],
@@ -33,7 +34,8 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
       include: { service: true, customer: true, professional: true }
     }) : [],
     enabled && desk ? db.appointment.count({ where: { tenantId, status: { in: ['CONFIRMED','COMPLETED'] }, startsAt: { gte: month.toJSDate(), lt: month.plus({ months: 1 }).toJSDate() } } }) : 0,
-    enabled && manager ? db.appointment.aggregate({ where: { tenantId, paidAt: { gte: month.toJSDate(), lt: month.plus({ months: 1 }).toJSDate() } }, _sum: { cents: true } }) : null
+    enabled && manager ? db.appointment.findMany({ where: { tenantId, refundedAt: null, paidAt: { gte: month.toJSDate(), lt: month.plus({ months: 1 }).toJSDate() } }, select: { cents: true, chargeCents: true } }) : [],
+    enabled && role === 'ADMIN' && tenant.stripeAccountId ? connectStatus(tenant.stripeAccountId).catch(() => null) : null
   ])
   return <div className="shell">
     <aside><Brand /><nav>
@@ -56,7 +58,7 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
       {enabled && desk && <>
         <section className="grid metrics">
           <article><CalendarDays /><p>Atendimentos no mês</p><strong>{monthlyCount}</strong></article>
-          {manager && <article><Wallet /><p>Recebido online no mês</p><strong>{brl(paid?._sum.cents ?? 0)}</strong></article>}
+          {manager && <article><Wallet /><p>Recebido online no mês</p><strong>{brl(paid.reduce((sum, row) => sum + (row.chargeCents ?? row.cents), 0))}</strong></article>}
         </section>
         <article id="agenda"><h2>Agenda</h2>
           {!appointments.length ? <p>Nenhum atendimento para exibir.</p> : <div className="scroll"><table><thead><tr><th>Horário</th><th>Cliente</th><th>Serviço</th><th>Profissional</th><th>Situação</th><th>Ações</th></tr></thead>
@@ -64,6 +66,9 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
             {item.status === 'CONFIRMED' && <form className="inline" action={manage.bind(null, 'appointment')}><input type="hidden" name="id" value={item.id} />
             {item.startsAt <= new Date() && <button className="outline" name="status" value="COMPLETED">Concluir</button>}
             {!item.paidAt && <button className="outline" name="status" value="CANCELED">Cancelar</button>}</form>}
+            {role === 'ADMIN' && item.status === 'CONFIRMED' && item.paidAt && <form action={manage.bind(null, 'refund')}>
+              <input type="hidden" name="id" value={item.id} /><button className="outline">Estornar e cancelar</button>
+            </form>}
           </td></tr>)}</tbody></table></div>}
         </article>
         <article><h2>Clientes</h2>
@@ -102,11 +107,12 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
           {tenant.whatsappInstance && <Field label="Enviar lembrete quantos minutos antes? (0 desativa)" name="reminderMinutes" type="number" min={0} value={tenant.reminderMinutes ?? 0} />}
           {!tenant.whatsappInstance && <input type="hidden" name="reminderMinutes" value="0" />}
           {tenant.stripeAccountId && <label className="check"><input type="checkbox" name="onlinePayment" defaultChecked={tenant.onlinePayment} /> Exigir pagamento online</label>}
+          {tenant.stripeAccountId && <Field label="Percentual cobrado antecipadamente" name="depositPercent" type="number" min={1} max={100} value={tenant.depositPercent} />}
           <button>Salvar configurações</button>
         </form><form action={manage.bind(null, 'cover')}>
           <label>Imagem de capa<input type="file" name="cover" accept="image/jpeg,image/png,image/webp" required /></label>
           <button className="outline">Salvar imagem</button>
-        </form><form action={manage.bind(null, 'connect')}><button className="outline">{tenant.stripeAccountId ? 'Revisar configuração de pagamentos' : 'Configurar pagamentos online'}</button></form>
+        </form>{tenant.stripeAccountId && <p>{connect ? (connect.payments ? 'Cobranças habilitadas' : connect.submitted ? 'Cadastro em análise' : 'Cadastro incompleto') + ' · ' + (connect.payouts ? 'Repasses habilitados' : 'Repasses indisponíveis') : 'Situação da conta de pagamentos indisponível.'}</p>}<form action={manage.bind(null, 'connect')}><button className="outline">{tenant.stripeAccountId ? 'Revisar configuração de pagamentos' : 'Configurar pagamentos online'}</button></form>
       </article>}
       {role === 'ADMIN' && tenant.stripeCustomerId && <article><h2>Cobrança</h2><Link href="/assinatura">Ver faturas da assinatura</Link><form action={manage.bind(null, 'portal')}><button className="outline">Gerenciar assinatura</button></form></article>}
     </main></div>

@@ -49,6 +49,7 @@ model Tenant {
   billingCheckout BillingCheckout?
   stripeAccountId String? @unique
   onlinePayment Boolean @default(false)
+  depositPercent Int @default(100)
   whatsappInstance String? @unique
   reminderMinutes Int?
   members Member[]
@@ -145,6 +146,9 @@ model Appointment {
   status Status
   cents Int
   paidAt DateTime?
+  chargeCents Int?
+  paymentIntentId String? @unique
+  refundedAt DateTime?
   consent Boolean @default(false)
   checkoutId String? @unique
   expiresAt DateTime?

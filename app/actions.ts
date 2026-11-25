@@ -8,6 +8,7 @@ import { endSession, hashPassword, membership, startSession, userSession, verify
 import { AgendaError, book } from '@/lib/agenda'
 import { saveStripeConfiguration, stripeConfiguration, stripeClient } from '@/lib/stripe-settings'
 import { subscriptionCheckout } from '@/lib/billing'
+import { refundAppointment } from '@/lib/connect'
 import { stripe } from '@/lib/stripe'
 import { allowAttempt, consumeAccountToken, mailConfigured, sendAccountLink } from '@/lib/account-security'
 import { uploadCover } from '@/lib/storage'
@@ -127,6 +128,7 @@ export async function manage(operation: string, form: FormData) {
         if (member.role !== 'ADMIN') throw new AgendaError('Seu acesso não permite esta operação.')
         const data = z.object({
           name: title, description: text, address: text, color: z.string().regex(/^#[\da-f]{6}$/i),
+          depositPercent: z.coerce.number().int().min(1).max(100).default(100),
           reminderMinutes: z.coerce.number().int().min(0).max(10080)
         }).parse(body)
         const onlinePayment = form.has('onlinePayment')
@@ -175,6 +177,11 @@ export async function manage(operation: string, form: FormData) {
           data: { status: data.status }
         })
         if (!result.count) throw new AgendaError('Não foi possível atualizar esse atendimento.')
+        break
+      }
+      case 'refund': {
+        if (member.role !== 'ADMIN') throw new AgendaError('Seu acesso não permite esta operação.')
+        await refundAppointment(tenantId, id.parse(form.get('id')))
         break
       }
       case 'connect': {
@@ -261,10 +268,10 @@ export async function reserve(link: string, form: FormData) {
     if (!online || !account) return path + '?reserva=' + appointment.id
     const session = await (await stripe()).checkout.sessions.create({
       mode: 'payment', payment_method_types: ['card'],
-      line_items: [{ price_data: { currency: 'brl', unit_amount: appointment.cents, product_data: { name: 'Agendamento — ' + tenant.name } }, quantity: 1 }],
+      line_items: [{ price_data: { currency: 'brl', unit_amount: appointment.chargeCents ?? appointment.cents, product_data: { name: 'Agendamento — ' + tenant.name } }, quantity: 1 }],
       metadata: { appointmentId: appointment.id },
       success_url: base() + path + '?reserva=pagamento', cancel_url: base() + path,
-      expires_at: Math.floor(Date.now() / 1000) + 31 * 60
+      expires_at: +appointment.expiresAt! / 1000
     }, { stripeAccount: account, idempotencyKey: 'appointment:' + appointment.id })
     await db.appointment.updateMany({ where: { id: appointment.id, status: 'PENDING' }, data: { checkoutId: session.id, expiresAt: new Date(session.expires_at * 1000) } })
     if (!session.url) throw new AgendaError('Não foi possível iniciar o pagamento.')

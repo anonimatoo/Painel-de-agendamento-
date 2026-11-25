@@ -1,5 +1,6 @@
 import { Queue, Worker } from 'bullmq'
 import { DateTime } from 'luxon'
+import { reconcileAppointments } from '../lib/connect'
 import { db } from '../lib/db'
 import { sendWhatsApp } from '../lib/evolution'
 
@@ -52,7 +53,7 @@ async function publishReminders() {
 }
 let pending: Promise<void> | undefined
 function tick() {
-  if (!pending) pending = publishReminders().catch(() => console.error('Não foi possível consultar os lembretes.')).finally(() => { pending = undefined })
+  if (!pending) pending = Promise.all([publishReminders(), reconcileAppointments()]).then(() => undefined).catch(() => console.error('Não foi possível consultar os lembretes.')).finally(() => { pending = undefined })
 }
 const timer = setInterval(tick, 15_000)
 tick()

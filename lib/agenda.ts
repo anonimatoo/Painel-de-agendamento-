@@ -54,7 +54,9 @@ export async function book(tenant: Tenant, data: { serviceId: string; profession
     const appointment = await tx.appointment.create({ data: {
       tenantId: tenant.id, customerId: customer.id, professionalId: data.professionalId,
       serviceId: data.serviceId, startsAt: slot.start, endsAt: slot.end, cents: service.cents,
-      status: data.online ? 'PENDING' : 'CONFIRMED', consent: data.consent
+      status: data.online ? 'PENDING' : 'CONFIRMED', consent: data.consent,
+      chargeCents: data.online ? Math.ceil(service.cents * tenant.depositPercent / 100) : undefined,
+      expiresAt: data.online ? new Date(Math.floor(Date.now() / 1000) * 1000 + 35 * 60_000) : undefined
     } })
     await scheduleReminder(tx, tenant, appointment)
     return appointment

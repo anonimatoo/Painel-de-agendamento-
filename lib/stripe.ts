@@ -1,3 +1,4 @@
+import type { Prisma } from '@prisma/client'
 import type Stripe from 'stripe'
 import { stripeClient, stripeConfiguration } from './stripe-settings'
 import { db } from './db'
@@ -16,19 +17,19 @@ export async function applyEvent(event: Stripe.Event) {
 
     if (event.account && ['checkout.session.completed', 'checkout.session.async_payment_succeeded', 'checkout.session.expired', 'checkout.session.async_payment_failed'].includes(event.type)) {
       const session = event.data.object as Stripe.Checkout.Session
-      const appointment = await tx.appointment.findFirst({
-        where: { id: session.metadata?.appointmentId ?? '', tenant: { stripeAccountId: event.account }, status: 'PENDING' },
-        include: { tenant: true }
-      })
-      if (!appointment || (appointment.checkoutId && appointment.checkoutId !== session.id)) return
-      if (event.type === 'checkout.session.expired' || event.type === 'checkout.session.async_payment_failed') {
-        await tx.appointment.updateMany({ where: { id: appointment.id, status: 'PENDING' }, data: { status: 'CANCELED' } })
-      } else if (session.payment_status === 'paid' && session.amount_total === appointment.cents && session.currency === 'brl') {
-        const updated = await tx.appointment.updateMany({
-          where: { id: appointment.id, status: 'PENDING' },
-          data: { status: 'CONFIRMED', paidAt: new Date(), checkoutId: session.id }
+      await settleAppointment(tx, event.account, session, event.type === 'checkout.session.expired' || event.type === 'checkout.session.async_payment_failed')
+    }
+
+    if (event.account && ['refund.created', 'refund.updated'].includes(event.type)) {
+      const refund = event.data.object as Stripe.Refund
+      if (refund.status === 'succeeded' && refund.metadata?.appointmentId) {
+        const paymentIntentId = typeof refund.payment_intent === 'string' ? refund.payment_intent : refund.payment_intent?.id
+        const appointment = await tx.appointment.findFirst({
+          where: { id: refund.metadata.appointmentId, tenant: { stripeAccountId: event.account }, paymentIntentId, paidAt: { not: null } }
         })
-        if (updated.count) await scheduleReminder(tx, appointment.tenant, { ...appointment, status: 'CONFIRMED' })
+        if (paymentIntentId && appointment && refund.currency === 'brl' && refund.amount === (appointment.chargeCents ?? appointment.cents)) {
+          await tx.appointment.update({ where: { id: appointment.id }, data: { refundedAt: new Date(), status: 'CANCELED' } })
+        }
       }
     }
 
@@ -52,4 +53,23 @@ export async function applyEvent(event: Stripe.Event) {
       await tx.tenant.update({ where: { id: tenant.id }, data: { active: active > 0 } })
     }
   }, { timeout: 20_000 })
+}
+
+
+export async function settleAppointment(tx: Prisma.TransactionClient, account: string, session: Stripe.Checkout.Session, expired: boolean) {
+  const appointment = await tx.appointment.findFirst({
+    where: { id: session.metadata?.appointmentId ?? '', tenant: { stripeAccountId: account }, status: 'PENDING' },
+    include: { tenant: true }
+  })
+  if (!appointment || (appointment.checkoutId && appointment.checkoutId !== session.id)) return
+  if (expired && session.payment_status !== 'paid') {
+    await tx.appointment.updateMany({ where: { id: appointment.id, status: 'PENDING' }, data: { checkoutId: session.id, status: 'CANCELED' } })
+  } else if (session.payment_status === 'paid' && session.amount_total === (appointment.chargeCents ?? appointment.cents) && session.currency === 'brl') {
+    const paymentIntentId = typeof session.payment_intent === 'string' ? session.payment_intent : session.payment_intent?.id
+    const updated = await tx.appointment.updateMany({
+      where: { id: appointment.id, status: 'PENDING' },
+      data: { status: 'CONFIRMED', paidAt: new Date(), checkoutId: session.id, paymentIntentId }
+    })
+    if (updated.count) await scheduleReminder(tx, appointment.tenant, { ...appointment, status: 'CONFIRMED' })
+  }
 }

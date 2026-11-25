@@ -61,6 +61,7 @@ model Tenant {
   depositPercent Int @default(100)
   whatsappInstance String? @unique
   reminderTemplate String?
+  statusMessages Boolean @default(false)
   reminderMinutes Int?
   members Member[]
   services Service[]
@@ -253,6 +254,8 @@ model Reminder {
   appointmentId String
   appointment Appointment @relation(fields: [appointmentId], references: [id])
   runAt DateTime
+  kind String @default("REMINDER")
+  scheduledStart DateTime?
   sentAt DateTime?
   claimedAt DateTime?
   @@unique([appointmentId, runAt])

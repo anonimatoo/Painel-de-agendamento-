@@ -109,6 +109,7 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
           <Field label="Endereço" name="address" value={tenant.address} required={false} /><Field label="Cor da página" name="color" type="color" value={tenant.color} />
           {tenant.whatsappInstance && <Field label="Enviar lembrete quantos minutos antes? (0 desativa)" name="reminderMinutes" type="number" min={0} value={tenant.reminderMinutes ?? 0} />}
           {tenant.whatsappInstance && <Field label="Mensagem do lembrete. Use {estabelecimento} e {horario} para preencher automaticamente." name="reminderTemplate" required={false} value={tenant.reminderTemplate ?? ''} />}
+          {tenant.whatsappInstance && <label className="check"><input type="checkbox" name="statusMessages" defaultChecked={tenant.statusMessages} /> Enviar avisos de confirmação, pagamento, reagendamento e cancelamento</label>}
           {!tenant.whatsappInstance && <input type="hidden" name="reminderMinutes" value="0" />}
           {tenant.stripeAccountId && <label className="check"><input type="checkbox" name="onlinePayment" defaultChecked={tenant.onlinePayment} /> Exigir pagamento online</label>}
           {tenant.stripeAccountId && <Field label="Percentual cobrado antecipadamente" name="depositPercent" type="number" min={1} max={100} value={tenant.depositPercent} />}

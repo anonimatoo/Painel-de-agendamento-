@@ -7,7 +7,7 @@ import { manage } from '../actions'
 import { Brand, ErrorNote, Field } from '../ui'
 
 const operations: Record<string, string> = {
-  CREATED: 'Reserva criada', RESCHEDULED: 'Reagendado', CANCELED: 'Cancelado', COMPLETED: 'Concluído', NO_SHOW: 'Falta registrada'
+  PAYMENT_CONFIRMED: 'Pagamento confirmado', CREATED: 'Reserva criada', RESCHEDULED: 'Reagendado', CANCELED: 'Cancelado', COMPLETED: 'Concluído', NO_SHOW: 'Falta registrada'
 }
 
 export default async function AgendaPage({ searchParams }: { searchParams: Promise<{ erro?: string }> }) {

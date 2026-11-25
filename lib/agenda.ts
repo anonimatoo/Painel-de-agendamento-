@@ -66,6 +66,7 @@ export async function book(tenant: Tenant, data: { serviceId: string; profession
     } })
     await tx.appointmentHistory.create({ data: { appointmentId: appointment.id, operation: 'CREATED', newStart: appointment.startsAt } })
     await scheduleReminder(tx, tenant, appointment)
+    if (!data.online) await enqueueStatus(tx, tenant, appointment, 'CONFIRMED')
     return appointment
   })
 }
@@ -78,6 +79,11 @@ export async function scheduleReminder(tx: Prisma.TransactionClient, tenant: Ten
     where: { appointmentId_runAt: { appointmentId: appointment.id, runAt } }, update: {},
     create: { appointmentId: appointment.id, runAt }
   })
+}
+
+export async function enqueueStatus(tx: Prisma.TransactionClient, tenant: Pick<Tenant, 'statusMessages'>, appointment: { id: string; startsAt: Date; consent: boolean }, kind: 'CONFIRMED' | 'PAID' | 'CANCELED' | 'RESCHEDULED') {
+  if (!tenant.statusMessages || !appointment.consent) return
+  await tx.reminder.create({ data: { appointmentId: appointment.id, runAt: new Date(), kind, scheduledStart: appointment.startsAt } })
 }
 
 async function lockProfessional(tx: Prisma.TransactionClient, tenantId: string, professionalId: string) {
@@ -125,9 +131,10 @@ export async function rescheduleAppointment(tenant: Tenant, id: string, startsAt
     await tx.appointmentHistory.create({
       data: { appointmentId: id, actorId, operation: 'RESCHEDULED', previousStart: result.startsAt, newStart: startsAt }
     })
-    await tx.reminder.deleteMany({ where: { appointmentId: id, sentAt: null, claimedAt: null } })
+    await tx.reminder.deleteMany({ where: { appointmentId: id, kind: 'REMINDER', sentAt: null, claimedAt: null } })
     const appointment = { ...result, startsAt, endsAt }
     await scheduleReminder(tx, tenant, appointment)
+    await enqueueStatus(tx, tenant, appointment, 'RESCHEDULED')
     return appointment
   })
 }
@@ -140,5 +147,9 @@ export async function closeAppointment(tenantId: string, id: string, status: 'CO
     })
     if (!updated.count) throw new AgendaError('Não foi possível atualizar esse atendimento.')
     await tx.appointmentHistory.create({ data: { appointmentId: id, actorId, operation: status } })
+    if (status === 'CANCELED') {
+      const appointment = await tx.appointment.findUniqueOrThrow({ where: { id }, include: { tenant: true } })
+      await enqueueStatus(tx, appointment.tenant, appointment, 'CANCELED')
+    }
   })
 }

@@ -1,0 +1,12 @@
+FROM node:24-bookworm-slim
+WORKDIR /app
+ENV NODE_ENV=production
+COPY package.json package-lock.json ./
+RUN npm ci --include=dev
+COPY prisma.config.ts tsconfig.json ./
+COPY prisma ./prisma
+RUN npx prisma generate
+COPY lib ./lib
+COPY worker ./worker
+USER node
+CMD ["npm", "run", "worker"]

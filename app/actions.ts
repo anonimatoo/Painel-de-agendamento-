@@ -174,7 +174,7 @@ export async function manage(operation: string, form: FormData) {
           throw new AgendaError('Conclua a configuração da conta para aceitar pagamentos.')
         }
         await db.tenant.update({ where: { id: tenantId }, data: {
-          ...data, reminderTemplate: data.reminderTemplate || null, reminderMinutes: data.reminderMinutes || null,
+          ...data, statusMessages: Boolean(tenant.whatsappInstance && form.has('statusMessages')), reminderTemplate: data.reminderTemplate || null, reminderMinutes: data.reminderMinutes || null,
           onlinePayment
         } })
         break
@@ -416,6 +416,7 @@ export async function reserve(link: string, form: FormData) {
     const data = z.object({ serviceId: id, professionalId: id, startsAt: z.string().datetime(), name: title, phone }).parse(Object.fromEntries(form))
     const tenant = await db.tenant.findFirst({ where: { slug: link, active: true, suspended: false } })
     if (!tenant) throw new AgendaError('Agendamento indisponível.')
+    if (!(await allowAttempt('reservation', tenant.id + ':' + data.phone, 10, 1800))) throw new AgendaError('Aguarde antes de iniciar outra reserva.')
     const service = await db.service.findFirst({ where: { tenantId: tenant.id, id: data.serviceId, active: true } })
     if (!service) throw new AgendaError('Serviço indisponível.')
     const online = tenant.onlinePayment && service.cents > 0

@@ -3,7 +3,7 @@ import type Stripe from 'stripe'
 import { stripeClient, stripeConfiguration } from './stripe-settings'
 import { db } from './db'
 import { settleOrder, settleOrderRefund } from './orders'
-import { scheduleReminder } from './agenda'
+import { enqueueStatus, scheduleReminder } from './agenda'
 
 export async function stripe() {
   return stripeClient((await stripeConfiguration()).secret)
@@ -74,6 +74,10 @@ export async function settleAppointment(tx: Prisma.TransactionClient, account: s
       where: { id: appointment.id, status: 'PENDING' },
       data: { status: 'CONFIRMED', paidAt: new Date(), checkoutId: session.id, paymentIntentId }
     })
-    if (updated.count) await scheduleReminder(tx, appointment.tenant, { ...appointment, status: 'CONFIRMED' })
+    if (updated.count) {
+      await scheduleReminder(tx, appointment.tenant, { ...appointment, status: 'CONFIRMED' })
+      await enqueueStatus(tx, appointment.tenant, appointment, 'PAID')
+      await tx.appointmentHistory.create({ data: { appointmentId: appointment.id, operation: 'PAYMENT_CONFIRMED' } })
+    }
   }
 }

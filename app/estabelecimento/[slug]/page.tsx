@@ -86,7 +86,7 @@ export default async function Establishment({ params, searchParams }: {
           <input type="hidden" name="serviceId" value={chosen.id} /><input type="hidden" name="professionalId" value={professional!.id} />
           <label>Horário<select name="startsAt" required>{slots.map(s => <option key={s.start} value={s.start}>{s.label}</option>)}</select></label>
           <Field label="Nome" name="name" /><Field label="WhatsApp com DDI (ex. 5511999999999)" name="phone" type="tel" />
-          <label className="check"><input type="checkbox" name="consent" /> Quero receber lembretes deste atendimento pelo WhatsApp.</label>
+          <label className="check"><input type="checkbox" name="consent" /> Quero receber lembretes e atualizações deste atendimento pelo WhatsApp.</label>
           <button>{tenant.onlinePayment && chosen.cents > 0 ? 'Continuar para pagamento' : 'Confirmar agendamento'}</button>
         </form>}
       </article>

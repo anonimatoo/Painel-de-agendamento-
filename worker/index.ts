@@ -23,9 +23,13 @@ const worker = new Worker('agenda-reminders', async job => {
   if (!reminder || reminder.sentAt || reminder.runAt > now) return
   const { appointment } = reminder
   const { tenant } = appointment
-  if (appointment.status !== 'CONFIRMED' || appointment.startsAt <= now || !appointment.consent ||
-      !tenant.active || tenant.suspended || !tenant.whatsappInstance || !tenant.reminderMinutes) return
-  if (+reminder.runAt !== +appointment.startsAt - tenant.reminderMinutes * 60_000) {
+  if (!appointment.consent || !tenant.active || tenant.suspended || !tenant.whatsappInstance) return
+  const reminderEligible = reminder.kind === 'REMINDER' && appointment.status === 'CONFIRMED' && appointment.startsAt > now &&
+    tenant.reminderMinutes && +reminder.runAt === +appointment.startsAt - tenant.reminderMinutes * 60_000
+  const sameStart = reminder.scheduledStart && +reminder.scheduledStart === +appointment.startsAt
+  const statusEligible = reminder.kind !== 'REMINDER' && tenant.statusMessages && sameStart &&
+    (reminder.kind === 'CANCELED' ? appointment.status === 'CANCELED' : appointment.status === 'CONFIRMED' && appointment.startsAt > now)
+  if (!reminderEligible && !statusEligible) {
     await db.reminder.deleteMany({ where: { id: reminder.id, sentAt: null, claimedAt: null } })
     return
   }
@@ -36,7 +40,15 @@ const worker = new Worker('agenda-reminders', async job => {
   if (!claimed.count) return
   try {
     const time = DateTime.fromJSDate(appointment.startsAt, { zone: tenant.timezone }).toFormat("dd/LL 'às' HH:mm")
-    await sendWhatsApp(tenant.whatsappInstance, appointment.customer.phone, reminderMessage(tenant.reminderTemplate, tenant.name, time))
+    const messages: Record<string, string> = {
+      CONFIRMED: 'atendimento confirmado para ' + time + '.',
+      PAID: 'pagamento recebido. Atendimento confirmado para ' + time + '.',
+      CANCELED: 'o atendimento de ' + time + ' foi cancelado.',
+      RESCHEDULED: 'o atendimento foi reagendado para ' + time + '.'
+    }
+    const message = reminder.kind === 'REMINDER' ? reminderMessage(tenant.reminderTemplate, tenant.name, time)
+      : tenant.name + ' informa: ' + messages[reminder.kind]
+    await sendWhatsApp(tenant.whatsappInstance, appointment.customer.phone, message)
     await db.reminder.update({ where: { id: reminder.id }, data: { sentAt: new Date(), claimedAt: null } })
   } catch (error) {
     await db.reminder.updateMany({ where: { id: reminder.id, claimedAt: now }, data: { claimedAt: null } })
@@ -48,9 +60,14 @@ async function publishReminders() {
   const now = new Date()
   const due = await db.reminder.findMany({
     take: 100, orderBy: { runAt: 'asc' },
-    where: { sentAt: null, runAt: { lte: now }, appointment: {
-      startsAt: { gt: now }, status: 'CONFIRMED', tenant: { active: true, suspended: false, whatsappInstance: { not: null }, reminderMinutes: { not: null } }
-    } }
+    where: {
+      sentAt: null, runAt: { gte: new Date(+now - 86_400_000), lte: now },
+      appointment: { consent: true, tenant: { active: true, suspended: false, whatsappInstance: { not: null } } },
+      OR: [
+        { kind: 'REMINDER', appointment: { startsAt: { gt: now }, status: 'CONFIRMED', tenant: { reminderMinutes: { not: null } } } },
+        { kind: { not: 'REMINDER' }, appointment: { tenant: { statusMessages: true } } }
+      ]
+    }
   })
   await queue.addBulk(due.map(({ id }) => ({
     name: 'send', data: { id },

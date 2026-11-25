@@ -6,7 +6,7 @@ import { instanceName } from '@/lib/whatsapp'
 import { saveWhatsAppPreferences } from '../actions'
 import { Brand, ErrorNote, Field } from '../ui'
 import { WhatsAppControls } from '../whatsapp-controls'
-import { ReminderEditor } from './template'
+import { ReminderEditor } from './reminder-editor'
 
 const labels: Record<string, string> = {
   QUEUED: 'Agendado', SENDING: 'Enviando', SENT: 'Aceito pelo WhatsApp',

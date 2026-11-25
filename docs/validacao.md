@@ -33,9 +33,9 @@ Permanecem pendentes o calendário completo com bloqueios, lista de espera e rea
 
 Nenhuma integração externa foi validada em sandbox ou em produção. A homologação requer contas e credenciais de Stripe Billing e Connect, um bucket S3 e uma Evolution API compatível. Nenhuma aplicação foi implantada em produção. Os testes locais usaram PostgreSQL e Redis em contêineres descartáveis.
 
-## Branch finalizacao-comercial
+## Branch finalizacao-comercial até a18adec
 
-A matriz acima registra a situação do commit-base `dfa6d3b`. Consulte a [matriz detalhada desta branch](finalizacao.md) para o estado atualizado.
+A matriz acima registra a situação do commit-base `dfa6d3b`. A matriz detalhada abaixo cobre a revisão mais recente.
 
 - Treze migrations aplicadas em PostgreSQL 16 local, inclusive em um banco vazio.
 - TypeScript, lint, build de produção e dez testes automatizados executados. Os testes adicionais cobrem redefinição de senha, revogação de sessões, TOTP, limite de tentativas, concorrência de estoque, liberação de estoque, bloqueios e reagendamento.
@@ -46,3 +46,15 @@ A matriz acima registra a situação do commit-base `dfa6d3b`. Consulte a [matri
 - Um evento local assinado com o SDK da Stripe foi entregue duas vezes ao endpoint e produziu um único registro. O evento verifica assinatura e deduplicação sem realizar uma transação externa.
 - No Chromium, um lançamento liquidado passou pelo formulário comercial. As exportações autenticadas retornaram o registro em CSV e um arquivo XLSX com tipo e assinatura esperados.
 - A auditoria de dependências ainda aponta o aviso GHSA-7589-6fvf-x4pw na cadeia do Prisma CLI. O aviso deve ser reavaliado antes do deploy.
+
+## Revisão posterior a a18adec
+
+- Build de produção, TypeScript e lint aprovados. O primeiro build identificou conflito com o nome de um componente do editor do WhatsApp. Renomeei o componente e repeti a execução completa.
+- 21 migrations aplicadas em um PostgreSQL 16 vazio e em um banco da revisão anterior.
+- 12 testes automatizados aprovados. A execução inclui regras de concorrência em agenda e estoque, retomada de Checkout com mesma chave após interrupção simulada, bloqueio de reserva incerta, estado de faturamento com eventos fora de ordem, envio ambíguo sem repetição, escopo do convite da equipe, revogação de sessão e cálculo de comissões.
+- Dez requisições HTTP passaram. O fluxo de cadastro, sessão, catálogo, agenda e reserva passou. Duas entregas de um evento local assinado resultaram em um registro.
+- Doze telas verificadas em 390 px e 1.280 px no Chromium. Registro financeiro e downloads autenticados em CSV e XLSX passaram.
+- Redis com BullMQ confirmou retentativa e deduplicação. SeaweedFS 4.55 confirmou upload, leitura, substituição, exclusão e isolamento S3.
+- Stripe, Evolution e Resend sem homologação externa. A simulação de transporte e assinatura local não usa credenciais nem transações de sandbox. Nenhum deploy ou cobrança em produção foi realizado.
+
+Consulte a [matriz atual por requisito](finalizacao.md) e o [roteiro de homologação](operacao.md#roteiro-de-homologação-externa).

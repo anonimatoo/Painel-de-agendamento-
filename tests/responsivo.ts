@@ -27,6 +27,12 @@ async function main() {
         ['/', 'Seu próximo atendimento começa aqui.'],
         ['/dashboard', 'Estúdio de teste visual'],
         ['/agenda', 'Agenda'],
+        ['/recebimentos', 'Receber pagamentos'],
+        ['/conciliacao', 'Movimentações Stripe'],
+        ['/primeiro-acesso', 'Primeiro acesso'],
+        ['/equipe', 'Equipe e permissões'],
+        ['/whatsapp', 'WhatsApp'],
+        ['/comissoes', 'Comissões profissionais'],
         ['/comercial', 'Estoque e financeiro'],
         ['/personalizacao?visual=celular', 'Personalização'],
         ['/estabelecimento/' + slug, 'Estúdio de teste visual']
@@ -53,7 +59,7 @@ async function main() {
     assert.match(xlsx.headers()['content-type'], /spreadsheetml/)
     assert.equal((await xlsx.body()).subarray(0, 2).toString(), 'PK')
     console.log('Registro financeiro e exportações autenticadas em CSV e XLSX verificados.')
-    console.log('Seis telas verificadas no Chromium em 390 px e 1280 px.')
+    console.log('Doze telas verificadas no Chromium em 390 px e 1280 px.')
   } finally {
     await browser?.close()
     await db.financialEntry.deleteMany({ where: { tenant: { slug } } })

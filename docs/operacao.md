@@ -12,18 +12,18 @@ Mantenha um bucket privado compatível com S3. Configure S3_ENDPOINT, S3_REGION,
 
 ## Stripe
 
-Configure STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET e STRIPE_CONNECT_WEBHOOK_SECRET no ambiente técnico. Use uma conta Stripe com Billing e Connect habilitados e configure o Customer Portal.
+Use uma conta Stripe com Billing e Connect habilitados e configure o Customer Portal. As credenciais salvas pelo Super Admin têm precedência sobre STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET e STRIPE_CONNECT_WEBHOOK_SECRET. O ambiente técnico é usado quando ainda não existe configuração salva. Web, worker e destinos consultam o mesmo registro ao iniciar cada operação. Use a mesma CREDENTIAL_ENCRYPTION_KEY em todos os processos do ambiente. Separe banco, chave, Redis, bucket, domínios e destinos de homologação e produção.
 
-- Crie um destino para eventos da conta da plataforma em `/api/stripe/billing`. Selecione `customer.subscription.created`, `customer.subscription.updated` e `customer.subscription.deleted`.
-- Crie um destino para eventos das contas conectadas em `/api/stripe/connect`. Selecione `checkout.session.completed`, `checkout.session.expired`, `checkout.session.async_payment_succeeded` e `checkout.session.async_payment_failed`.
+- Crie um destino para eventos da conta da plataforma em `/api/stripe/billing`. Selecione `customer.subscription.created`, `customer.subscription.updated`, `customer.subscription.deleted`, `customer.subscription.paused`, `customer.subscription.resumed`, `invoice.finalized`, `invoice.paid`, `invoice.payment_failed`, `invoice.payment_action_required`, `invoice.finalization_failed`, `invoice.voided` e `invoice.marked_uncollectible`.
+- Crie um destino para eventos das contas conectadas em `/api/stripe/connect`. Selecione `checkout.session.completed`, `checkout.session.expired`, `checkout.session.async_payment_succeeded` `checkout.session.async_payment_failed`, `refund.created` e `refund.updated`.
 - Em ambiente de teste, contrate um plano e verifique a assinatura na plataforma. Conclua o onboarding de uma conta BR com cobrança por cartão habilitada. Faça um agendamento pago e confirme no painel que o Stripe registrou a cobrança na conta conectada.
-- Se uma falha ocorrer durante a criação do Checkout, concilie primeiro a reserva com a Stripe antes de liberar o horário. Os eventos de expiração cancelam as reservas associadas à sessão. A recuperação automática de uma falha entre reserva e criação da sessão está pendente.
+- Se a criação do Checkout for interrompida, o worker recupera a tentativa de atendimento usando os mesmos parâmetros e a mesma chave. Quando não houver prova financeira, a reserva fica em verificação e permanece bloqueada. Consulte **Receber pagamentos** para reconciliar o estado com a Stripe. Pedidos com estado incerto mantêm o estoque reservado. Use **Estoque e financeiro** para verificar novamente. Casos de pagamento tardio após cancelamento exigem análise do responsável e eventual estorno pelo provedor.
 
 ## WhatsApp
 
-Configure EVOLUTION_URL e EVOLUTION_API_KEY para uma instância Evolution API v2 sob controle técnico. Provisione um WhatsApp por estabelecimento e vincule o nome da instância usando o painel Super Admin. O assinante ajusta a antecedência do lembrete no próprio painel. O worker consulta os lembretes no PostgreSQL e os publica no Redis. Confirme a entrega com um destinatário autorizado.
+Configure EVOLUTION_URL e EVOLUTION_API_KEY apenas no web e worker. O painel permite conectar uma instância previamente vinculada. Para habilitar o provisionamento automático por QR, configure EVOLUTION_QR_PROVISIONING=true após verificar a compatibilidade e as políticas do WhatsApp. O fluxo automático usa o modo Baileys do fornecedor. Se a operação exigir uma modalidade oficial, mantenha o provisionamento por QR desativado e vincule uma instância compatível provisionada pela infraestrutura. O assinante ajusta os lembretes em **WhatsApp**.
 
-O provisionamento por QR dentro do painel está pendente. A entrega pode ser repetida se o provedor aceitar uma mensagem e a gravação da confirmação local falhar.
+O worker registra cada envio no PostgreSQL antes de chamar o provedor. Uma recusa explícita por limite pode ser repetida com espera progressiva. Falhas ambíguas ou interrupções durante o envio ficam em **Envio em verificação**. Confirme o histórico diretamente no provedor antes de autorizar outro contato. O status aceito pelo provedor não equivale à confirmação de leitura ou entrega final.
 
 ## Atualizações e recuperação
 
@@ -53,7 +53,7 @@ O worker pode ser construído com `docker build -f Dockerfile.worker -t cs-agend
 1. Entre com a senha inicial, abra **Minha conta** e gere a chave do autenticador. Adicione a chave no aplicativo e confirme com o código. Nos acessos seguintes informe o código na seção **Acesso de Super Admin**.
 2. Em **Configuração da Stripe**, selecione o ambiente e informe as chaves e os dois segredos dos destinos. Confirme sua senha. Use **Testar conexão** após atualizar. Mantenha um banco e um projeto separados por ambiente.
 3. Cadastre os planos mensais e anuais e indique os dias de avaliação. Crie os cupons e códigos promocionais na Stripe. Ative cancelamento, atualização de pagamento e mudanças entre preços no Customer Portal.
-4. Consulte os estabelecimentos e suspenda ou reative quando necessário. O vínculo de WhatsApp deve apontar para uma instância exclusiva do estabelecimento. Configure a Evolution no servidor antes de vincular.
+4. Consulte os estabelecimentos e suspenda ou reative quando necessário. Cada estabelecimento possui um vínculo exclusivo. Ative o provisionamento automático por QR apenas na modalidade compatível.
 
 ## Manual do assinante
 
@@ -67,10 +67,20 @@ O worker pode ser construído com `docker build -f Dockerfile.worker -t cs-agend
 
 1. Stripe em modo de teste. Use os dois destinos configurados para suas respectivas contas. Adicione `refund.created` e `refund.updated` ao destino do Connect. Valide um ciclo com plano mensal, anual, avaliação, cupom, alteração no Portal, cancelamento, falha de pagamento e regularização. Inicie a mesma assinatura em duas abas e confira uma única sessão ativa. Use os relatórios da Stripe para confirmar o estado do pagamento e a conta beneficiária.
 2. Connect. Conclua o onboarding BR. Faça pagamento integral, sinal e compra de produto no Checkout. Verifique saldo e estorno na conta vinculada, devolução do estoque, expiração e conciliação com desligamento temporário do destino de webhook. Para pagamentos antigos sem sessão associada, faça a conciliação manual antes de liberar horário.
-3. Evolution. Confirme a versão implantada. Os endpoints foram conferidos no código oficial da versão 2.3.8. Vincule uma instância de teste e valide QR, status, desconexão e reconexão. Faça reserva com consentimento e verifique lembrete, atualização após pagamento, reagendamento e cancelamento. Confirme que outra unidade não acessa a instância. [Roteador oficial da Evolution API](https://github.com/EvolutionAPI/evolution-api/blob/main/src/api/routes/instance.router.ts)
+3. Evolution. Confirme a versão implantada. Os endpoints foram conferidos no código oficial da versão 2.3.8. Provisione uma instância de teste e valide QR, status, desconexão e reconexão. Faça reserva com consentimento e verifique lembrete, atualização após pagamento, reagendamento e cancelamento. Confirme que outra unidade não acessa a instância. [Roteador oficial da Evolution API](https://github.com/EvolutionAPI/evolution-api/blob/main/src/api/routes/instance.router.ts)
 4. S3. Configure bucket privado com as permissões necessárias para gravar, ler e apagar. Publique uma imagem, substitua-a, publique novamente a aplicação e confirme a leitura. Verifique se objetos excluídos deixaram de ser servidos e faça inventário para identificar objetos órfãos.
-5. Redis e worker. Em homologação, reinicie o worker durante um atraso e durante uma falha de provedor. Confirme a recuperação dos registros pendentes. A deduplicação local não garante envio único após uma aceitação ambígua no provedor.
+5. Redis e worker. Em homologação, reinicie o worker durante um atraso e durante uma falha de provedor. Confirme a recuperação dos registros pendentes. Confirme que o worker deixa envios ambíguos em verificação após reiniciar. Em caso de dúvida, confira o histórico do provedor antes de contatar o destinatário de novo.
 
 ## Planejamento de capacidade e custos
 
 Dimensione requests e duração de funções Vercel, armazenamento e horas de compute Neon, espaço e operações S3, Redis por memória e retenção e dois serviços persistentes para worker e Evolution. O plano gratuito da Vercel é voltado a uso pessoal. Selecione o plano adequado para uso comercial. O consumo e o orçamento dependem da quantidade de empresas, reservas, mensagens e imagens. A escolha de planos e a cotação ficam pendentes até definir região e volume. [Vercel](https://vercel.com/pricing) · [Neon](https://neon.com/pricing) · [Cloudflare R2](https://developers.cloudflare.com/r2/pricing/)
+
+
+## Operação e monitoramento
+
+- Monitore o código HTTP da página pública e da página de entrada, disponibilidade do banco e autenticação dos destinos Stripe. Verifique no painel quando cada tipo de notificação foi processado. Compare com a aba de entregas da Stripe após rotação de segredos.
+- Acompanhe logs e reinícios do worker, atraso das filas, pedidos e reservas em verificação, faturas em aberto e mensagens com falha. Garanta Redis persistente e PostgreSQL com cópias testadas.
+- Para interromper novas cobranças, use **Desconectar** na configuração Stripe após salvar suas credenciais. O acompanhamento de cobranças existentes, webhooks e estornos continua. Use **Reconectar** para habilitar novas cobranças.
+- Antes de alterar a regra de comissão, confirme o valor comercial com o estabelecimento. Uma cobrança já preparada mantém o valor gravado na tentativa. A comissão profissional é apurada ao concluir o atendimento. Registrar pagamento é uma baixa manual.
+- Para homologar comissões e movimentações, compare as tarifas, comissões, estornos, contestações e repasses com o extrato oficial. A página de movimentações usa os valores do provedor na conta selecionada.
+- Em **Comunicação**, utilize apenas o aviso manual autorizado. Ele consulta uma fatura em aberto e envia seu link oficial ao administrador com e-mail confirmado. Nenhuma cobrança é criada pela ação.

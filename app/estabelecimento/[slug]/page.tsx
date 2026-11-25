@@ -62,7 +62,7 @@ export default async function Establishment({ params, searchParams }: {
           <button>{tenant.onlinePayment && chosen.cents > 0 ? 'Continuar para pagamento' : 'Confirmar agendamento'}</button>
         </form>}
       </article>
-      {tenant.products.length > 0 && <article><h2>Produtos disponíveis</h2><ul>{tenant.products.map(p => <li key={p.id}>{p.name} · {brl(p.cents)}</li>)}</ul></article>}
+      {tenant.products.length > 0 && <article><h2>Produtos disponíveis</h2><ul>{tenant.products.map(p => <li key={p.id}>{p.name} · {brl(p.promotionCents ?? p.cents)}</li>)}</ul></article>}
     </main>
   </div>
 }

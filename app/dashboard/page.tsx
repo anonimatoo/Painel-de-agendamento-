@@ -42,6 +42,7 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
     <aside><Brand /><nav>
       <Link href="/dashboard"><ClipboardList /> Visão geral</Link>
       {enabled && desk && <a href="#agenda"><CalendarDays /> Agenda</a>}
+      {enabled && manager && <Link href="/comercial"><Wallet /> Estoque e financeiro</Link>}
       {enabled && manager && <a href="#equipe"><UsersRound /> Equipe e catálogo</a>}
       {enabled && role === 'ADMIN' && <a href="#configuracoes"><Settings /> Configurações</a>}
     <Link href="/conta">Minha conta</Link></nav><form action={logout}><button className="subtle">Sair</button></form></aside>

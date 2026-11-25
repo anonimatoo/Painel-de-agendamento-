@@ -58,6 +58,7 @@ model Tenant {
   professionals Professional[]
   customers Customer[]
   products Product[]
+  financialEntries FinancialEntry[]
   appointments Appointment[]
   subscriptions Subscription[]
   createdAt DateTime @default(now())
@@ -128,10 +129,58 @@ model Product {
   tenantId String
   tenant Tenant @relation(fields: [tenantId], references: [id])
   name String
+  category String @default("")
   cents Int
+  costCents Int @default(0)
+  promotionCents Int?
+  minimumStock Int @default(0)
   stock Int
+  movements StockMovement[]
   @@index([tenantId])
+  @@unique([tenantId, id])
 }
+
+enum MovementKind {
+  ADJUSTMENT
+  SALE
+  REVERSAL
+}
+
+model StockMovement {
+  id String @id @default(cuid())
+  tenantId String
+  productId String
+  product Product @relation(fields: [tenantId, productId], references: [tenantId, id])
+  kind MovementKind
+  quantity Int
+  unitCents Int @default(0)
+  unitCostCents Int @default(0)
+  requestId String
+  reversedAt DateTime?
+  createdAt DateTime @default(now())
+  @@unique([tenantId, requestId])
+  @@index([tenantId, createdAt])
+}
+
+enum EntryKind {
+  INCOME
+  EXPENSE
+}
+
+model FinancialEntry {
+  id String @id @default(cuid())
+  tenantId String
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+  kind EntryKind
+  title String
+  cents Int
+  dueAt DateTime
+  paidAt DateTime?
+  createdAt DateTime @default(now())
+  @@index([tenantId, dueAt])
+  @@index([tenantId, paidAt])
+}
+
 model Appointment {
   id String @id @default(cuid())
   tenantId String

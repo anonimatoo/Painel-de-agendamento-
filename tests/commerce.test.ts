@@ -1,0 +1,34 @@
+import assert from 'node:assert/strict'
+import { randomUUID } from 'node:crypto'
+import { after, test } from 'node:test'
+import { cashReport, changeStock, reverseSale } from '../lib/commerce'
+import { db } from '../lib/db'
+
+after(() => db.$disconnect())
+
+test('vendas concorrentes respeitam o estoque e cancelamento devolve unidades uma vez', async () => {
+  const tenant = await db.tenant.create({ data: { name: 'Estoque de teste', slug: randomUUID() } })
+  const other = await db.tenant.create({ data: { name: 'Outro estabelecimento', slug: randomUUID() } })
+  try {
+    const product = await db.product.create({ data: { tenantId: tenant.id, name: 'Produto', cents: 900, promotionCents: 800, stock: 3 } })
+    const request = { tenantId: tenant.id, productId: product.id, quantity: 2, requestId: randomUUID(), sale: true }
+    await assert.rejects(changeStock({ ...request, tenantId: other.id }))
+    const results = await Promise.allSettled([changeStock(request), changeStock({ ...request, requestId: randomUUID() })])
+    const fulfilled = results.filter(result => result.status === 'fulfilled')
+    assert.equal(fulfilled.length, 1)
+    const sale = fulfilled[0].value
+    assert.equal(sale.unitCents, 800)
+    const duplicate = await changeStock({ ...request, requestId: sale.requestId })
+    assert.equal(duplicate.id, sale.id)
+    assert.equal((await db.product.findUniqueOrThrow({ where: { id: product.id } })).stock, 1)
+    assert.equal((await cashReport(tenant.id, tenant.timezone)).rows[0].cents, 1600)
+    assert.deepEqual((await cashReport(other.id, other.timezone)).rows, [])
+    await Promise.all([reverseSale(tenant.id, sale.id), reverseSale(tenant.id, sale.id)])
+    assert.equal((await db.product.findUniqueOrThrow({ where: { id: product.id } })).stock, 3)
+    assert.equal(await db.stockMovement.count({ where: { tenantId: tenant.id } }), 2)
+  } finally {
+    await db.stockMovement.deleteMany({ where: { tenantId: tenant.id } })
+    await db.product.deleteMany({ where: { tenantId: tenant.id } })
+    await db.tenant.deleteMany({ where: { id: { in: [tenant.id, other.id] } } })
+  }
+})

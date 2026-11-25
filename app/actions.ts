@@ -2,6 +2,8 @@
 
 import { redirect, unstable_rethrow } from 'next/navigation'
 import { z } from 'zod'
+import { DateTime } from 'luxon'
+import { changeStock, reverseSale } from '@/lib/commerce'
 import { Prisma } from '@prisma/client'
 import { db } from '@/lib/db'
 import { endSession, hashPassword, membership, startSession, userSession, verifyPassword } from '@/lib/auth'
@@ -204,6 +206,47 @@ export async function manage(operation: string, form: FormData) {
     }
     return '/dashboard'
   }, '/dashboard')
+}
+
+export async function commerce(operation: 'product' | 'stock' | 'sale' | 'reverse' | 'entry' | 'settle', form: FormData) {
+  await perform(async () => {
+    const user = await userSession()
+    if (!user) return '/login'
+    const member = await membership(user.id)
+    if (!member || !['ADMIN', 'MANAGER'].includes(member.role) || !member.tenant.active || member.tenant.suspended) {
+      return '/dashboard'
+    }
+    const tenantId = member.tenantId
+    const body = Object.fromEntries(form)
+    if (operation === 'product') {
+      const data = z.object({
+        id, name: title, category: z.string().trim().max(80), cents, costCents: cents,
+        promotionCents: z.union([z.literal(''), cents.min(1)]), minimumStock: z.coerce.number().int().min(0).max(1_000_000)
+      }).parse(body)
+      if (data.promotionCents !== '' && data.promotionCents > data.cents) throw new AgendaError('O preço promocional deve ser menor ou igual ao preço de venda.')
+      const result = await db.product.updateMany({
+        where: { id: data.id, tenantId },
+        data: { name: data.name, category: data.category, cents: data.cents, costCents: data.costCents, promotionCents: data.promotionCents || null, minimumStock: data.minimumStock }
+      })
+      if (!result.count) throw new AgendaError('Produto indisponível.')
+    } else if (operation === 'stock' || operation === 'sale') {
+      const values = z.object({
+        productId: id, requestId: z.uuid(), quantity: z.coerce.number().int().min(-1000000).max(1000000).refine(value => value !== 0)
+      }).parse(body)
+      if (operation === 'sale' && values.quantity < 0) throw new AgendaError('Informe uma quantidade positiva.')
+      await changeStock({ tenantId, ...values, sale: operation === 'sale' })
+    } else if (operation === 'reverse') {
+      await reverseSale(tenantId, id.parse(body.id))
+    } else if (operation === 'entry') {
+      const values = z.object({ title, kind: z.enum(['INCOME', 'EXPENSE']), cents: cents.min(1), dueAt: z.iso.date() }).parse(body)
+      const date = DateTime.fromISO(values.dueAt, { zone: member.tenant.timezone })
+      if (!date.isValid) throw new AgendaError('Informe um vencimento válido.')
+      await db.financialEntry.create({ data: { tenantId, ...values, dueAt: date.toJSDate(), paidAt: form.has('paid') ? new Date() : null } })
+    } else if (operation === 'settle') {
+      await db.financialEntry.updateMany({ where: { id: id.parse(body.id), tenantId, paidAt: null }, data: { paidAt: new Date() } })
+    }
+    return '/comercial'
+  }, '/comercial')
 }
 
 export async function whatsappControl(_previous: { message?: string; qr?: string }, form: FormData): Promise<{ message?: string; qr?: string }> {

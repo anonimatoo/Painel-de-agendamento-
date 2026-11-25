@@ -131,6 +131,13 @@ test('bloqueios concorrem com reservas e reagendamento preserva histórico', asy
     const review = await db.appointment.findUniqueOrThrow({ where: { id: pending.id } })
     assert.equal(review.checkoutState, 'REVIEW')
     assert.equal(review.status, 'PENDING')
+    const { closeAppointment } = await import('../lib/agenda')
+    await db.professional.update({ where: { id: professional.id }, data: { commissionBps: 1250 } })
+    await db.appointment.update({
+      where: { id: appointment.id }, data: { startsAt: new Date(Date.now() - 3_600_000), endsAt: new Date(Date.now() - 1_800_000) }
+    })
+    await closeAppointment(tenant.id, appointment.id, 'COMPLETED', 'tester')
+    assert.equal((await db.professionalCommission.findUniqueOrThrow({ where: { appointmentId: appointment.id } })).cents, 625)
 
 
   } finally {

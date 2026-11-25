@@ -2,6 +2,7 @@ import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { db } from '@/lib/db'
 import { userSession } from '@/lib/auth'
+import { PlatformFeeForm } from './platform-fee'
 import { admin, logout } from '../actions'
 import { Brand, ErrorNote, Field, brl } from '../ui'
 
@@ -57,7 +58,7 @@ export default async function SuperAdmin({ searchParams }: { searchParams: Promi
         <thead><tr><th>Estabelecimento</th><th>Acesso</th><th>Assinaturas</th><th>Ação</th><th>WhatsApp</th></tr></thead>
         <tbody>{tenants.map(t => <tr key={t.id}><td>{t.name}</td><td>{t.suspended ? 'Suspenso' : t.active ? 'Ativo' : 'Inativo'}</td>
           <td>{t.subscriptions.map(s => s.plan.name).join(', ') || 'Nenhuma'}</td>
-          <td><form action={admin.bind(null, 'suspend')}><input type="hidden" name="tenantId" value={t.id} /><button name="suspended" value={String(!t.suspended)} className="outline">{t.suspended ? 'Remover suspensão' : 'Suspender'}</button></form></td>
+          <td><form action={admin.bind(null, 'suspend')}><input type="hidden" name="tenantId" value={t.id} /><button name="suspended" value={String(!t.suspended)} className="outline">{t.suspended ? 'Remover suspensão' : 'Suspender'}</button></form><PlatformFeeForm scope="tenant" id={t.id} bps={t.platformFeeBps} fixed={t.platformFeeFixed} /></td>
           <td><form action={admin.bind(null, 'whatsapp')}><input type="hidden" name="tenantId" value={t.id} />
             <Field label="Instância do WhatsApp" name="instance" value={t.whatsappInstance ?? ''} required={false} /><button className="outline">Salvar vínculo</button>
           </form></td></tr>)}</tbody>
@@ -65,7 +66,7 @@ export default async function SuperAdmin({ searchParams }: { searchParams: Promi
       <article id="planos"><h2>Planos</h2><form className="inline" action={admin.bind(null, 'plan')}>
         <Field label="Nome" name="name" /><Field label="Descrição" name="description" /><Field label="Mensal em centavos" name="monthlyCents" type="number" min={100} />
         <Field label="Anual em centavos" name="annualCents" type="number" min={100} /><Field label="Dias de avaliação" name="trialDays" type="number" min={0} max={90} value={0} /><button>Criar plano</button></form>
-        {plans.length > 0 && <ul>{plans.map(p => <li key={p.id}>{p.name} · {brl(p.monthlyCents)} por mês · {brl(p.annualCents)} por ano</li>)}</ul>}
+        {plans.length > 0 && <ul>{plans.map(p => <li key={p.id}>{p.name} · {brl(p.monthlyCents)} por mês · {brl(p.annualCents)} por ano<PlatformFeeForm scope="plan" id={p.id} bps={p.platformFeeBps} fixed={p.platformFeeFixed} /></li>)}</ul>}
       </article>
     </main></div>
 }

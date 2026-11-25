@@ -365,7 +365,7 @@ export async function whatsappControl(_previous: { message?: string; qr?: string
   }
 }
 
-export async function admin(operation: 'plan' | 'suspend' | 'whatsapp' | 'stripe-config' | 'stripe-test' | 'stripe-pause', form: FormData) {
+export async function admin(operation: 'plan' | 'suspend' | 'whatsapp' | 'stripe-config' | 'stripe-test' | 'stripe-pause' | 'platform-fee', form: FormData) {
   await perform(async () => {
     const user = await userSession()
     if (!user?.platformAdmin) return '/login'
@@ -395,6 +395,23 @@ export async function admin(operation: 'plan' | 'suspend' | 'whatsapp' | 'stripe
         secret: data.secret, billingWebhook: data.billingWebhook, connectWebhook: data.connectWebhook
       })
       return '/super-admin?stripe=conectada'
+    }
+    if (operation === 'platform-fee') {
+      const values = z.object({
+        id, scope: z.enum(['tenant', 'plan']), method: z.enum(['none', 'plan', 'percent', 'fixed']),
+        percent: z.coerce.number().min(0).max(100), fixed: cents
+      }).parse(body)
+      if (values.scope === 'plan' && values.method === 'plan') throw new AgendaError('Escolha uma regra para o plano.')
+      const percent = values.method === 'percent' ? Math.round(values.percent * 100) : 0
+      const fixed = values.method === 'fixed' ? values.fixed : 0
+      await db.$transaction(async tx => {
+        if (values.scope === 'tenant') await tx.tenant.update({ where: { id: values.id }, data: {
+          platformFeeBps: values.method === 'plan' ? null : percent, platformFeeFixed: values.method === 'plan' ? null : fixed
+        } })
+        else await tx.plan.update({ where: { id: values.id }, data: { platformFeeBps: percent, platformFeeFixed: fixed } })
+        await tx.adminAudit.create({ data: { actorId: user.id, targetId: values.id, action: 'PLATFORM_FEE_UPDATED' } })
+      })
+      return '/super-admin'
     }
     if (operation === 'plan') {
       const data = z.object({ name: title, description: title, monthlyCents: cents.min(100), annualCents: cents.min(100), trialDays: z.coerce.number().int().min(0).max(90).default(0) }).parse(body)
@@ -489,6 +506,7 @@ export async function shopCheckout(link: string, form: FormData) {
       line_items: order.items.map(item => ({
         quantity: item.quantity, price_data: { currency: 'brl', unit_amount: item.unitCents, product_data: { name: item.name } }
       })),
+      payment_intent_data: order.platformFeeCents ? { application_fee_amount: order.platformFeeCents } : undefined,
       metadata: { orderId: order.id }, success_url: base() + path + '?pedido=' + order.id, cancel_url: base() + path
     }, { stripeAccount: account, idempotencyKey: 'order:' + order.id })
     await db.shopOrder.updateMany({ where: { id: order.id, status: 'PENDING' }, data: { checkoutId: session.id } })
@@ -588,4 +606,28 @@ export async function teamAccess(form: FormData) {
     await manageTeamAccess(member.tenantId, user.id, values.userId, values.state)
     return '/equipe'
   }, '/equipe')
+}
+
+export async function professionalCommission(form: FormData) {
+  await perform(async () => {
+    const user = await userSession()
+    const member = user ? await membership(user.id) : null
+    if (!member || member.role !== 'ADMIN' || !member.tenant.active || member.tenant.suspended) return '/dashboard'
+    const values = z.object({
+      id, operation: z.enum(['save', 'paid']),
+      percent: z.coerce.number().min(0).max(100).default(0), fixed: cents.default(0)
+    }).parse(Object.fromEntries(form))
+    if (values.operation === 'paid') {
+      await db.professionalCommission.updateMany({
+        where: { appointmentId: values.id, paidAt: null, appointment: { tenantId: member.tenantId } }, data: { paidAt: new Date() }
+      })
+    } else {
+      if (values.percent && values.fixed) throw new AgendaError('Escolha um percentual ou um valor fixo.')
+      await db.professional.updateMany({
+        where: { id: values.id, tenantId: member.tenantId },
+        data: { commissionBps: Math.round(values.percent * 100), commissionFixed: values.fixed }
+      })
+    }
+    return '/comissoes'
+  }, '/comissoes')
 }

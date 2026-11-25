@@ -22,7 +22,7 @@ export async function refundAppointment(tenantId: string, appointmentId: string)
   const intent = typeof session.payment_intent === 'string' ? session.payment_intent : session.payment_intent?.id
   if (!intent || session.payment_status !== 'paid') throw new AgendaError('O pagamento ainda não pode ser estornado.')
   const refund = await api.refunds.create({
-    payment_intent: intent, metadata: { appointmentId }
+    payment_intent: intent, refund_application_fee: item.platformFeeCents > 0 || undefined, metadata: { appointmentId }
   }, { stripeAccount: account, idempotencyKey: 'appointment-refund:' + appointmentId })
   if (refund.status === 'succeeded') {
     await db.appointment.updateMany({ where: { id: appointmentId, tenantId, paidAt: { not: null } }, data: { refundedAt: new Date(), status: 'CANCELED' } })
@@ -41,6 +41,7 @@ export async function openAppointmentCheckout(reservation: Appointment, api?: St
     mode: 'payment', payment_method_types: ['card'],
     line_items: [{ price_data: { currency: 'brl', unit_amount: reservation.chargeCents ?? reservation.cents, product_data: { name: 'Pagamento de atendimento' } }, quantity: 1 }],
     metadata: { appointmentId: reservation.id },
+    payment_intent_data: reservation.platformFeeCents ? { application_fee_amount: reservation.platformFeeCents } : undefined,
     success_url: reservation.checkoutReturnUrl + '?pagamento=' + reservation.paymentToken,
     cancel_url: reservation.checkoutReturnUrl + '?pagamento=' + reservation.paymentToken,
     expires_at: +reservation.expiresAt / 1000
@@ -103,7 +104,7 @@ export async function refundOrder(tenantId: string, orderId: string) {
   })
   const account = order?.tenant.stripeAccountId
   if (!order?.paymentIntentId || !account) throw new AgendaError('O pedido ainda não pode ser estornado.')
-  const refund = await (await stripe()).refunds.create({ payment_intent: order.paymentIntentId, metadata: { orderId } },
+  const refund = await (await stripe()).refunds.create({ payment_intent: order.paymentIntentId, refund_application_fee: order.platformFeeCents > 0 || undefined, metadata: { orderId } },
     { stripeAccount: account, idempotencyKey: 'order-refund:' + orderId })
   if (refund.status === 'succeeded') await db.$transaction(tx => settleOrderRefund(tx, account, refund))
   else if (refund.status !== 'pending' && refund.status !== 'requires_action') throw new AgendaError('O estorno não foi aprovado.')

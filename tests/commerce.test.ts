@@ -35,7 +35,7 @@ test('vendas concorrentes respeitam o estoque e cancelamento devolve unidades um
 
 test('reservas de carrinho concorrem por estoque e expiração libera uma vez', async () => {
   const { reserveOrder, cancelOrder } = await import('../lib/orders')
-  const tenant = await db.tenant.create({ data: { name: 'Loja', slug: randomUUID() } })
+  const tenant = await db.tenant.create({ data: { name: 'Loja', slug: randomUUID(), platformFeeBps: 250 } })
   try {
     const product = await db.product.create({ data: { tenantId: tenant.id, name: 'Kit', cents: 2500, stock: 3 } })
     const request = { tenantId: tenant.id, name: 'Cliente', phone: '5511999999999', cart: [{ productId: product.id, quantity: 2 }] }
@@ -44,6 +44,7 @@ test('reservas de carrinho concorrem por estoque e expiração libera uma vez', 
     assert.equal(paid.length, 1)
     const order = paid[0].value
     assert.equal(order.cents, 5000)
+    assert.equal(order.platformFeeCents, 125)
     assert.equal((await reserveOrder({ ...request, requestId: order.requestId })).id, order.id)
     await Promise.all([db.$transaction(tx => cancelOrder(tx, tenant.id, order.id)), db.$transaction(tx => cancelOrder(tx, tenant.id, order.id))])
     assert.equal((await db.product.findUniqueOrThrow({ where: { id: product.id } })).stock, 3)

@@ -27,7 +27,7 @@ export default async function CommercePage({ searchParams }: { searchParams: Pro
   const outstanding = entries.filter(entry => !entry.paidAt)
   const date = (value: Date) => DateTime.fromJSDate(value, { zone }).toFormat('dd/LL/yyyy')
   return <div className="site"><header><Brand /><Link href="/dashboard">Voltar ao painel</Link></header><main className="content">
-    <h1>Estoque e financeiro</h1><ErrorNote error={query.erro} />
+    <h1>Estoque e financeiro</h1>{member.role === 'ADMIN' && <Link href="/comissoes">Comissões profissionais</Link>}<ErrorNote error={query.erro} />
     <section className="grid metrics">
       <article><p>Entradas no mês</p><strong>{brl(positive)}</strong></article>
       <article><p>Saídas no mês</p><strong>{brl(negative)}</strong></article>

@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { DateTime } from 'luxon'
 import { Prisma, Tenant } from '@prisma/client'
+import { calculateCommission, platformFee } from './commission'
 import { db } from './db'
 
 export function dayBounds(day: string, zone: string) {
@@ -58,6 +59,8 @@ export async function book(tenant: Tenant, data: { serviceId: string; profession
       update: {},
       create: { tenantId: tenant.id, name, phone }
     })
+    const chargeCents = data.online ? Math.ceil(service.cents * tenant.depositPercent / 100) : undefined
+    const platformFeeCents = chargeCents ? await platformFee(tx, tenant.id, chargeCents) : 0
     const appointment = await tx.appointment.create({ data: {
       tenantId: tenant.id, customerId: customer.id, professionalId: data.professionalId,
       serviceId: data.serviceId, startsAt: slot.start, endsAt: slot.end, cents: service.cents,
@@ -66,7 +69,7 @@ export async function book(tenant: Tenant, data: { serviceId: string; profession
       checkoutState: data.online ? 'CREATING' : undefined,
       checkoutAccountId: data.online ? tenant.stripeAccountId : undefined,
       paymentToken: data.online ? randomUUID() : undefined,
-      chargeCents: data.online ? Math.ceil(service.cents * tenant.depositPercent / 100) : undefined,
+      chargeCents, platformFeeCents,
       expiresAt: data.online ? new Date(Math.floor(Date.now() / 1000) * 1000 + 35 * 60_000) : undefined
     } })
     await tx.appointmentHistory.create({ data: { appointmentId: appointment.id, operation: 'CREATED', newStart: appointment.startsAt } })
@@ -152,6 +155,11 @@ export async function closeAppointment(tenantId: string, id: string, status: 'CO
     })
     if (!updated.count) throw new AgendaError('Não foi possível atualizar esse atendimento.')
     await tx.appointmentHistory.create({ data: { appointmentId: id, actorId, operation: status } })
+    if (status === 'COMPLETED') {
+      const appointment = await tx.appointment.findUniqueOrThrow({ where: { id }, include: { professional: true } })
+      const cents = calculateCommission(appointment.cents, appointment.professional.commissionBps, appointment.professional.commissionFixed)
+      if (cents) await tx.professionalCommission.create({ data: { appointmentId: id, cents } })
+    }
     if (status === 'CANCELED') {
       const appointment = await tx.appointment.findUniqueOrThrow({ where: { id }, include: { tenant: true } })
       await enqueueStatus(tx, appointment.tenant, appointment, 'CANCELED')

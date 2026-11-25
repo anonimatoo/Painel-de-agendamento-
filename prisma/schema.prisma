@@ -61,6 +61,8 @@ model Tenant {
   stripeAccountId String? @unique
   onlinePayment Boolean @default(false)
   depositPercent Int @default(100)
+  platformFeeBps Int?
+  platformFeeFixed Int?
   whatsappInstance String? @unique
   reminderTemplate String?
   statusMessages Boolean @default(false)
@@ -111,6 +113,8 @@ model Professional {
   tenant Tenant @relation(fields: [tenantId], references: [id])
   name String
   active Boolean @default(true)
+  commissionBps Int @default(0)
+  commissionFixed Int @default(0)
   assignments Assignment[]
   hours WorkHours[]
   blocks ScheduleBlock[]
@@ -222,6 +226,8 @@ model Appointment {
   cents Int
   paidAt DateTime?
   chargeCents Int?
+  platformFeeCents Int @default(0)
+  commission ProfessionalCommission?
   paymentIntentId String? @unique
   refundedAt DateTime?
   consent Boolean @default(false)
@@ -241,6 +247,8 @@ model Plan {
   name String
   description String
   trialDays Int @default(0)
+  platformFeeBps Int @default(0)
+  platformFeeFixed Int @default(0)
   monthlyCents Int
   annualCents Int
   monthlyPriceId String @unique
@@ -412,6 +420,7 @@ model ShopOrder {
   customerName String
   phone String
   cents Int
+  platformFeeCents Int @default(0)
   status OrderStatus @default(PENDING)
   checkoutId String? @unique
   paymentIntentId String? @unique
@@ -472,4 +481,12 @@ model TeamEvent {
   action String
   createdAt DateTime @default(now())
   @@index([tenantId, createdAt])
+}
+
+model ProfessionalCommission {
+  appointmentId String @id
+  appointment Appointment @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+  cents Int
+  paidAt DateTime?
+  createdAt DateTime @default(now())
 }

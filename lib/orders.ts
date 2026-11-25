@@ -1,6 +1,7 @@
 import type { Prisma } from '@prisma/client'
 import type Stripe from 'stripe'
 import { AgendaError } from './agenda'
+import { platformFee } from './commission'
 import { db } from './db'
 
 export async function reserveOrder(input: { tenantId: string; requestId: string; name: string; phone: string; cart: { productId: string; quantity: number }[] }) {
@@ -32,7 +33,7 @@ export async function reserveOrder(input: { tenantId: string; requestId: string;
     if (cents > 9_999_999) throw new AgendaError('O total excede o limite de um pedido.')
     return tx.shopOrder.create({
       data: {
-        tenantId, requestId, cents, customerName: name, phone,
+        tenantId, requestId, cents, platformFeeCents: await platformFee(tx, tenantId, cents), customerName: name, phone,
         expiresAt: new Date(Math.floor(Date.now() / 1000) * 1000 + 35 * 60_000),
         items: { createMany: { data: items.map(({ tenantId: _tenantId, ...item }) => item) } }
       }, include: { items: true }

@@ -1,0 +1,69 @@
+import { Queue, Worker } from 'bullmq'
+import { DateTime } from 'luxon'
+import { db } from '../lib/db'
+import { sendWhatsApp } from '../lib/evolution'
+
+const url = new URL(process.env.REDIS_URL ?? 'redis://localhost:56379')
+const connection = {
+  host: url.hostname, port: Number(url.port || '6379'),
+  username: url.username ? decodeURIComponent(url.username) : undefined,
+  password: url.password ? decodeURIComponent(url.password) : undefined,
+  db: Number(url.pathname.slice(1) || '0'), maxRetriesPerRequest: null,
+  tls: url.protocol === 'rediss:' ? {} : undefined
+}
+const queue = new Queue('agenda-reminders', { connection })
+const worker = new Worker('agenda-reminders', async job => {
+  const now = new Date()
+  const reminder = await db.reminder.findUnique({
+    where: { id: job.data.id }, include: { appointment: { include: { customer: true, tenant: true } } }
+  })
+  if (!reminder || reminder.sentAt || reminder.runAt > now) return
+  const { appointment } = reminder
+  const { tenant } = appointment
+  if (appointment.status !== 'CONFIRMED' || appointment.startsAt <= now || !appointment.consent ||
+      !tenant.active || tenant.suspended || !tenant.whatsappInstance || !tenant.reminderMinutes) return
+  const claimed = await db.reminder.updateMany({
+    where: { id: reminder.id, sentAt: null, OR: [{ claimedAt: null }, { claimedAt: { lt: new Date(+now - 60_000) } }] },
+    data: { claimedAt: now }
+  })
+  if (!claimed.count) return
+  try {
+    const time = DateTime.fromJSDate(appointment.startsAt, { zone: tenant.timezone }).toFormat("dd/LL 'às' HH:mm")
+    await sendWhatsApp(tenant.whatsappInstance, appointment.customer.phone, 'Olá! Seu atendimento em ' + tenant.name + ' está marcado para ' + time + '.')
+    await db.reminder.update({ where: { id: reminder.id }, data: { sentAt: new Date(), claimedAt: null } })
+  } catch (error) {
+    await db.reminder.updateMany({ where: { id: reminder.id, claimedAt: now }, data: { claimedAt: null } })
+    throw error
+  }
+}, { connection })
+
+async function publishReminders() {
+  const now = new Date()
+  const due = await db.reminder.findMany({
+    take: 100, orderBy: { runAt: 'asc' },
+    where: { sentAt: null, runAt: { lte: now }, appointment: {
+      startsAt: { gt: now }, status: 'CONFIRMED', tenant: { active: true, suspended: false, whatsappInstance: { not: null }, reminderMinutes: { not: null } }
+    } }
+  })
+  await queue.addBulk(due.map(({ id }) => ({
+    name: 'send', data: { id },
+    opts: { jobId: id, attempts: 5, backoff: { type: 'exponential', delay: 30_000 }, removeOnComplete: true, removeOnFail: { age: 3600 } }
+  })))
+}
+let pending: Promise<void> | undefined
+function tick() {
+  if (!pending) pending = publishReminders().catch(() => console.error('Não foi possível consultar os lembretes.')).finally(() => { pending = undefined })
+}
+const timer = setInterval(tick, 15_000)
+tick()
+worker.on('error', () => console.error('Falha na conexão do worker.'))
+worker.on('failed', job => console.error('Falha no envio do lembrete', job?.id))
+async function shutdown() {
+  clearInterval(timer)
+  await pending
+  await worker.close()
+  await queue.close()
+  await db.$disconnect()
+}
+process.once('SIGTERM', shutdown)
+process.once('SIGINT', shutdown)

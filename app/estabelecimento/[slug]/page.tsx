@@ -20,10 +20,16 @@ export default async function Establishment({ params, searchParams }: {
       services: { where: { active: true, assignments: { some: { professional: { active: true } } } }, include: {
         assignments: { where: { professional: { active: true } }, include: { professional: true } }
       } },
+      media: true,
       products: { where: { stock: { gt: 0 } } }
     }
   })
   if (!tenant) notFound()
+  const image = (kind: string, target = '') => tenant.media.find(item => item.kind === kind && item.target === target)?.key
+  const cover = image('COVER') ?? tenant.coverKey
+  const banner = image('BANNER')
+  const logo = image('LOGO')
+  const gallery = tenant.media.filter(item => item.kind === 'GALLERY')
   const confirmed = typeof query.reserva === 'string' && query.reserva.length < 100 && query.reserva !== 'pagamento'
     ? await db.appointment.count({ where: { id: query.reserva, tenantId: tenant.id, status: 'CONFIRMED' } })
     : 0
@@ -43,7 +49,16 @@ export default async function Establishment({ params, searchParams }: {
   }
   return <div className="site" style={{ '--accent': tenant.color } as React.CSSProperties}>
     <header><Brand /></header><main className="content booking">
-      <section className="public-title">{tenant.coverKey && <img className="cover" src={'/api/imagens/' + tenant.coverKey} alt="" />}<h1>{tenant.name}</h1><p>{tenant.description}</p>{tenant.address && <p>{tenant.address}</p>}</section>
+      <section className={'public-title ' + (tenant.theme === 'dark' ? 'dark-profile' : '')}>
+        {banner && <img className="cover" src={'/api/imagens/' + banner} alt="" />}
+        {cover && <img className="cover" src={'/api/imagens/' + cover} alt="" />}
+        {logo && <img width={64} height={64} className="profile-logo" src={'/api/imagens/' + logo} alt="" />}
+        <h1>{tenant.name}</h1><p>{tenant.description}</p>{tenant.address && <p>{tenant.address}</p>}
+        <nav className="inline" aria-label="Contato">
+          {tenant.instagramUrl && <a href={tenant.instagramUrl} rel="noreferrer">Instagram</a>}
+          {tenant.contactPhone && <a href={'https://wa.me/' + tenant.contactPhone} rel="noreferrer">WhatsApp</a>}
+        </nav>
+      </section>
       <ErrorNote error={query.erro ?? dateError} />
       {query.espera && <p className="success" role="status">Solicitação de lista de espera enviada.</p>}
       {confirmed > 0 && <p className="success" role="status">Seu agendamento foi confirmado.</p>}
@@ -70,7 +85,15 @@ export default async function Establishment({ params, searchParams }: {
           <button>{tenant.onlinePayment && chosen.cents > 0 ? 'Continuar para pagamento' : 'Confirmar agendamento'}</button>
         </form>}
       </article>
-      {tenant.products.length > 0 && <article><h2>Produtos disponíveis</h2><ul>{tenant.products.map(p => <li key={p.id}>{p.name} · {brl(p.promotionCents ?? p.cents)}</li>)}</ul></article>}
+      {chosen && (image('SERVICE', chosen.id) || professional && image('PROFESSIONAL', professional.id)) && <article><h2>Serviço e profissional</h2>
+        <div className="grid">
+          {image('SERVICE', chosen.id) && <figure><img className="cover" src={'/api/imagens/' + image('SERVICE', chosen.id)} alt="" /><figcaption>{chosen.name}</figcaption></figure>}
+          {professional && image('PROFESSIONAL', professional.id) && <figure><img className="cover" src={'/api/imagens/' + image('PROFESSIONAL', professional.id)} alt="" /><figcaption>{professional.name}</figcaption></figure>}
+        </div>
+      </article>}
+      {gallery.length > 0 && <article><h2>Galeria</h2><div className="grid">{gallery.map(item => <img key={item.key} className="cover" src={'/api/imagens/' + item.key} alt={'Foto de ' + tenant.name} />)}</div></article>}
+      {tenant.policies && <article><h2>Políticas de atendimento</h2><p className="preserve-lines">{tenant.policies}</p></article>}
+      {tenant.products.length > 0 && <article><h2>Produtos disponíveis</h2><ul>{tenant.products.map(p => <li key={p.id}>{image('PRODUCT', p.id) && <img className="catalog-photo" src={'/api/imagens/' + image('PRODUCT', p.id)} alt="" />}{p.name} · {brl(p.promotionCents ?? p.cents)}</li>)}</ul></article>}
     </main>
   </div>
 }

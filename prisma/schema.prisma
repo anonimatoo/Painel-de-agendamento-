@@ -46,6 +46,11 @@ model Tenant {
   address String @default("")
   color String @default("#6d42dd")
   coverKey String? @unique
+  instagramUrl String?
+  contactPhone String?
+  policies String @default("")
+  theme String @default("light")
+  media MediaAsset[]
   timezone String @default("America/Sao_Paulo")
   active Boolean @default(false)
   suspended Boolean @default(false)
@@ -339,4 +344,26 @@ model WaitEntry {
   createdAt DateTime @default(now())
   @@unique([tenantId, professionalId, serviceId, day, phone])
   @@index([tenantId, day])
+}
+
+enum MediaKind {
+  LOGO
+  BANNER
+  COVER
+  PROFESSIONAL
+  SERVICE
+  PRODUCT
+  GALLERY
+}
+
+model MediaAsset {
+  id String @id @default(cuid())
+  tenantId String
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  kind MediaKind
+  target String
+  key String @unique
+  bytes Int
+  createdAt DateTime @default(now())
+  @@unique([tenantId, kind, target])
 }

@@ -2,6 +2,7 @@
 
 import { redirect, unstable_rethrow } from 'next/navigation'
 import { z } from 'zod'
+import { randomUUID } from 'node:crypto'
 import { DateTime } from 'luxon'
 import { changeStock, reverseSale } from '@/lib/commerce'
 import { Prisma } from '@prisma/client'
@@ -15,7 +16,7 @@ import { refundAppointment } from '@/lib/connect'
 import { stripe } from '@/lib/stripe'
 import { allowAttempt, consumeAccountToken, mailConfigured, sendAccountLink } from '@/lib/account-security'
 import { finishMfaSetup, startMfaSetup, verifyMfa } from '@/lib/mfa'
-import { uploadCover } from '@/lib/storage'
+import { deleteMedia, storeMedia } from '@/lib/storage'
 
 const title = z.string().trim().min(2).max(100)
 const text = z.string().trim().max(1000)
@@ -181,8 +182,7 @@ export async function manage(operation: string, form: FormData) {
         if (member.role !== 'ADMIN') throw new AgendaError('Seu acesso não permite esta operação.')
         const image = form.get('cover')
         if (!(image instanceof File)) throw new AgendaError('Selecione uma imagem.')
-        const coverKey = await uploadCover(tenantId, image)
-        await db.tenant.update({ where: { id: tenantId }, data: { coverKey } })
+        await storeMedia(tenantId, 'COVER', '', image)
         break
       }
       case 'service':
@@ -250,6 +250,35 @@ export async function manage(operation: string, form: FormData) {
     }
     return '/dashboard'
   }, ['reschedule', 'block', 'unblock', 'wait-close'].includes(operation) ? '/agenda' : '/dashboard')
+}
+
+export async function brandSettings(operation: 'profile' | 'upload' | 'delete', form: FormData) {
+  await perform(async () => {
+    const user = await userSession()
+    if (!user) return '/login'
+    const member = await membership(user.id)
+    if (!member || member.role !== 'ADMIN' || !member.tenant.active || member.tenant.suspended) return '/dashboard'
+    const tenantId = member.tenantId
+    if (operation === 'profile') {
+      const values = z.object({
+        theme: z.enum(['light', 'dark']), policies: text,
+        instagramUrl: z.union([z.literal(''), z.string().max(250).regex(/^https:\/\/(?:www\.)?instagram\.com\/[\w.]+\/?$/i)]),
+        contactPhone: z.union([z.literal(''), phone])
+      }).parse(Object.fromEntries(form))
+      await db.tenant.update({ where: { id: tenantId }, data: {
+        ...values, contactPhone: values.contactPhone || null, instagramUrl: values.instagramUrl || null
+      } })
+    } else if (operation === 'upload') {
+      const kind = z.enum(['LOGO', 'BANNER', 'COVER', 'PROFESSIONAL', 'SERVICE', 'PRODUCT', 'GALLERY']).parse(form.get('kind'))
+      const files = form.get('image')
+      if (!(files instanceof File)) throw new AgendaError('Selecione uma imagem.')
+      const target = kind === 'GALLERY' ? randomUUID() : ['PROFESSIONAL','SERVICE','PRODUCT'].includes(kind) ? id.parse(form.get('target')) : ''
+      await storeMedia(tenantId, kind, target, files)
+    } else if (operation === 'delete') {
+      await deleteMedia(tenantId, id.parse(form.get('id')))
+    }
+    return '/personalizacao'
+  }, '/personalizacao')
 }
 
 export async function commerce(operation: 'product' | 'stock' | 'sale' | 'reverse' | 'entry' | 'settle', form: FormData) {

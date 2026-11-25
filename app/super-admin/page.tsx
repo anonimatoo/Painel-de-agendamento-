@@ -24,7 +24,7 @@ export default async function SuperAdmin({ searchParams }: { searchParams: Promi
       </table></div>}</article>
       <article id="planos"><h2>Planos</h2><form className="inline" action={admin.bind(null, 'plan')}>
         <Field label="Nome" name="name" /><Field label="Descrição" name="description" /><Field label="Mensal em centavos" name="monthlyCents" type="number" min={100} />
-        <Field label="Anual em centavos" name="annualCents" type="number" min={100} /><button>Criar plano</button></form>
+        <Field label="Anual em centavos" name="annualCents" type="number" min={100} /><Field label="Dias de avaliação" name="trialDays" type="number" min={0} max={90} value={0} /><button>Criar plano</button></form>
         {plans.length > 0 && <ul>{plans.map(p => <li key={p.id}>{p.name} · {brl(p.monthlyCents)} por mês · {brl(p.annualCents)} por ano</li>)}</ul>}
       </article>
     </main></div>

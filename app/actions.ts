@@ -6,6 +6,7 @@ import { Prisma } from '@prisma/client'
 import { db } from '@/lib/db'
 import { endSession, hashPassword, membership, startSession, userSession, verifyPassword } from '@/lib/auth'
 import { AgendaError, book } from '@/lib/agenda'
+import { subscriptionCheckout } from '@/lib/billing'
 import { stripe } from '@/lib/stripe'
 import { allowAttempt, consumeAccountToken, mailConfigured, sendAccountLink } from '@/lib/account-security'
 import { uploadCover } from '@/lib/storage'
@@ -109,23 +110,13 @@ export async function manage(operation: string, form: FormData) {
     const body = Object.fromEntries(form)
     if (operation === 'subscription' || operation === 'portal') {
       if (member.role !== 'ADMIN') throw new AgendaError('Seu acesso não permite esta operação.')
-      const api = stripe()
-      if (operation === 'portal' || tenant.stripeCustomerId && await db.subscription.count({ where: { tenantId, status: { notIn: ['canceled', 'incomplete_expired'] } } })) {
+      if (operation === 'portal') {
         if (!tenant.stripeCustomerId) throw new AgendaError('Você ainda não possui uma assinatura.')
-        const portal = await api.billingPortal.sessions.create({ customer: tenant.stripeCustomerId, return_url: base() + '/dashboard' })
+        const portal = await stripe().billingPortal.sessions.create({ customer: tenant.stripeCustomerId, return_url: base() + '/assinatura' })
         return portal.url
       }
-      const data = pay.parse(body)
-      const plan = await db.plan.findFirst({ where: { id: data.planId, active: true } })
-      if (!plan) throw new AgendaError('Esse plano não está disponível.')
-      const customer = tenant.stripeCustomerId ?? (await api.customers.create({ email: user.email, name: tenant.name }, { idempotencyKey: 'tenant:' + tenantId })).id
-      await db.tenant.update({ where: { id: tenantId }, data: { stripeCustomerId: customer } })
-      const session = await api.checkout.sessions.create({
-        mode: 'subscription', customer, line_items: [{ price: data.cycle === 'monthly' ? plan.monthlyPriceId : plan.annualPriceId, quantity: 1 }],
-        success_url: base() + '/dashboard?assinatura=recebida', cancel_url: base() + '/dashboard'
-      }, { idempotencyKey: ['billing', tenantId, plan.id, data.cycle, Math.floor(Date.now() / 1_800_000)].join(':') })
-      if (!session.url) throw new AgendaError('Não foi possível iniciar o pagamento.')
-      return session.url
+      if (mailConfigured() && !user.emailVerifiedAt) throw new AgendaError('Confirme seu e-mail antes de contratar uma assinatura.')
+      return subscriptionCheckout({ tenantId, email: user.email, origin: base(), ...pay.parse(body) })
     }
     if (!tenant.active || tenant.suspended) throw new AgendaError('Seu estabelecimento precisa de uma assinatura ativa.')
     const manager = member.role === 'ADMIN' || member.role === 'MANAGER'
@@ -211,7 +202,7 @@ export async function admin(operation: 'plan' | 'suspend' | 'whatsapp', form: Fo
     if (!user?.platformAdmin) return '/login'
     const body = Object.fromEntries(form)
     if (operation === 'plan') {
-      const data = z.object({ name: title, description: title, monthlyCents: cents.min(100), annualCents: cents.min(100) }).parse(body)
+      const data = z.object({ name: title, description: title, monthlyCents: cents.min(100), annualCents: cents.min(100), trialDays: z.coerce.number().int().min(0).max(90).default(0) }).parse(body)
       const api = stripe()
       const product = await api.products.create({ name: data.name, description: data.description })
       const [monthly, annual] = await Promise.all([

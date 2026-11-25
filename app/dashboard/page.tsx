@@ -108,6 +108,6 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
           <button className="outline">Salvar imagem</button>
         </form><form action={manage.bind(null, 'connect')}><button className="outline">{tenant.stripeAccountId ? 'Revisar configuração de pagamentos' : 'Configurar pagamentos online'}</button></form>
       </article>}
-      {role === 'ADMIN' && tenant.stripeCustomerId && <article><h2>Cobrança</h2><form action={manage.bind(null, 'portal')}><button className="outline">Gerenciar assinatura</button></form></article>}
+      {role === 'ADMIN' && tenant.stripeCustomerId && <article><h2>Cobrança</h2><Link href="/assinatura">Ver faturas da assinatura</Link><form action={manage.bind(null, 'portal')}><button className="outline">Gerenciar assinatura</button></form></article>}
     </main></div>
 }

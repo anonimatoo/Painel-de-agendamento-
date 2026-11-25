@@ -46,6 +46,7 @@ model Tenant {
   active Boolean @default(false)
   suspended Boolean @default(false)
   stripeCustomerId String? @unique
+  billingCheckout BillingCheckout?
   stripeAccountId String? @unique
   onlinePayment Boolean @default(false)
   whatsappInstance String? @unique
@@ -155,6 +156,7 @@ model Plan {
   id String @id @default(cuid())
   name String
   description String
+  trialDays Int @default(0)
   monthlyCents Int
   annualCents Int
   monthlyPriceId String @unique
@@ -217,4 +219,14 @@ model AdminAudit {
   targetId String
   createdAt DateTime @default(now())
   @@index([createdAt])
+}
+
+model BillingCheckout {
+  id String @id @default(cuid())
+  tenantId String @unique
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  priceId String
+  customerId String
+  trialDays Int
+  expiresAt DateTime
 }

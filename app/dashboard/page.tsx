@@ -103,7 +103,7 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
           <Field label="Estoque inicial" name="stock" type="number" min={0} /><button>Adicionar produto</button>
         </form>{products.length > 0 && <ul>{products.map(p => <li key={p.id}>{p.name} · {brl(p.cents)} · {p.stock} em estoque</li>)}</ul>}</article>
       </section>}
-      {enabled && role === 'ADMIN' && <article id="configuracoes"><h2>Configurações</h2><Link href="/personalizacao">Personalizar página pública</Link>
+      {enabled && role === 'ADMIN' && <article id="configuracoes"><h2>Configurações</h2><Link href="/recebimentos">Receber pagamentos</Link><Link href="/personalizacao">Personalizar página pública</Link>
         <form action={manage.bind(null, 'settings')}>
           <Field label="Nome" name="name" value={tenant.name} /><Field label="Descrição" name="description" value={tenant.description} required={false} />
           <Field label="Endereço" name="address" value={tenant.address} required={false} /><Field label="Cor da página" name="color" type="color" value={tenant.color} />

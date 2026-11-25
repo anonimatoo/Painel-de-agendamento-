@@ -19,7 +19,7 @@ export async function applyEvent(event: Stripe.Event) {
     if (event.account && ['checkout.session.completed', 'checkout.session.async_payment_succeeded', 'checkout.session.expired', 'checkout.session.async_payment_failed'].includes(event.type)) {
       const session = event.data.object as Stripe.Checkout.Session
       const expired = event.type === 'checkout.session.expired' || event.type === 'checkout.session.async_payment_failed'
-      await settleAppointment(tx, event.account, session, expired)
+      await settleAppointment(tx, event.account, session, event.type === 'checkout.session.expired' && session.status === 'expired')
       await settleOrder(tx, event.account, session, expired)
     }
 
@@ -62,17 +62,24 @@ export async function applyEvent(event: Stripe.Event) {
 
 export async function settleAppointment(tx: Prisma.TransactionClient, account: string, session: Stripe.Checkout.Session, expired: boolean) {
   const appointment = await tx.appointment.findFirst({
-    where: { id: session.metadata?.appointmentId ?? '', tenant: { stripeAccountId: account }, status: 'PENDING' },
+    where: { id: session.metadata?.appointmentId ?? '', tenant: { stripeAccountId: account }, status: { in: ['PENDING', 'CANCELED'] } },
     include: { tenant: true }
   })
   if (!appointment || (appointment.checkoutId && appointment.checkoutId !== session.id)) return
+  if (appointment.checkoutAccountId && appointment.checkoutAccountId !== account) return
+  if (appointment.status === 'CANCELED') {
+    if (session.payment_status === 'paid' && !appointment.paidAt) {
+      await tx.appointment.updateMany({ where: { id: appointment.id, status: 'CANCELED', paidAt: null }, data: { checkoutId: session.id, checkoutState: 'REVIEW' } })
+    }
+    return
+  }
   if (expired && session.payment_status !== 'paid') {
-    await tx.appointment.updateMany({ where: { id: appointment.id, status: 'PENDING' }, data: { checkoutId: session.id, status: 'CANCELED' } })
+    await tx.appointment.updateMany({ where: { id: appointment.id, status: 'PENDING' }, data: { checkoutId: session.id, status: 'CANCELED', checkoutState: 'EXPIRED' } })
   } else if (session.payment_status === 'paid' && session.amount_total === (appointment.chargeCents ?? appointment.cents) && session.currency === 'brl') {
     const paymentIntentId = typeof session.payment_intent === 'string' ? session.payment_intent : session.payment_intent?.id
     const updated = await tx.appointment.updateMany({
       where: { id: appointment.id, status: 'PENDING' },
-      data: { status: 'CONFIRMED', paidAt: new Date(), checkoutId: session.id, paymentIntentId }
+      data: { status: 'CONFIRMED', paidAt: new Date(), checkoutId: session.id, paymentIntentId, checkoutState: 'PAID' }
     })
     if (updated.count) {
       await scheduleReminder(tx, appointment.tenant, { ...appointment, status: 'CONFIRMED' })

@@ -4,14 +4,14 @@ import { DateTime } from 'luxon'
 import { db } from '@/lib/db'
 import { AgendaError, availability } from '@/lib/agenda'
 import { SlotPicker } from './slot-picker'
-import { joinWaitlist, reserve, shopCheckout } from '../../actions'
+import { joinWaitlist, reserve, retryPayment, shopCheckout } from '../../actions'
 import { Brand, ErrorNote, Field, brl } from '../../ui'
 
 export const dynamic = 'force-dynamic'
 
 export default async function Establishment({ params, searchParams }: {
   params: Promise<{ slug: string }>
-  searchParams: Promise<{ servico?: string; profissional?: string; dia?: string; erro?: string; reserva?: string; espera?: string; pedido?: string }>
+  searchParams: Promise<{ servico?: string; profissional?: string; dia?: string; erro?: string; reserva?: string; espera?: string; pedido?: string; pagamento?: string }>
 }) {
   const { slug } = await params
   const query = await searchParams
@@ -34,6 +34,10 @@ export default async function Establishment({ params, searchParams }: {
   const confirmed = typeof query.reserva === 'string' && query.reserva.length < 100 && query.reserva !== 'pagamento'
     ? await db.appointment.count({ where: { id: query.reserva, tenantId: tenant.id, status: 'CONFIRMED' } })
     : 0
+  const paymentToken = typeof query.pagamento === 'string' && /^[a-f0-9-]{36}$/.test(query.pagamento) ? query.pagamento : undefined
+  const payment = paymentToken ? await db.appointment.findFirst({
+    where: { tenantId: tenant.id, paymentToken }, select: { status: true, checkoutState: true, expiresAt: true }
+  }) : null
   const order = typeof query.pedido === 'string' && query.pedido.length < 100
     ? await db.shopOrder.findFirst({ where: { id: query.pedido, tenantId: tenant.id }, select: { status: true } }) : null
   const purchasable = tenant.stripeAccountId && tenant.products.some(product => (product.promotionCents ?? product.cents) > 0)
@@ -64,6 +68,11 @@ export default async function Establishment({ params, searchParams }: {
         </nav>
       </section>
       <ErrorNote error={query.erro ?? dateError} />
+      {payment && <article><h2>Situação do pagamento</h2>
+        <p role="status">{payment.status === 'CONFIRMED' ? 'Pagamento confirmado. Seu horário está reservado.' : payment.checkoutState === 'REVIEW' ? 'Pagamento em verificação. Entre em contato com o estabelecimento antes de pagar novamente.' : payment.status === 'CANCELED' ? 'O prazo para pagamento terminou.' : 'Aguardamos a confirmação do pagamento.'}</p>
+        {paymentToken && payment.status === 'PENDING' && payment.checkoutState !== 'REVIEW' && payment.expiresAt && payment.expiresAt > new Date() &&
+          <form action={retryPayment.bind(null, slug, paymentToken)}><button>Continuar pagamento</button></form>}
+      </article>}
       {order && <p className="success" role="status">{order.status === 'PAID' ? 'Pagamento do pedido confirmado. Combine a retirada com o estabelecimento.' : order.status === 'PENDING' ? 'Aguardando confirmação do pagamento do pedido.' : 'Este pedido foi cancelado ou estornado.'}</p>}
       {query.espera && <p className="success" role="status">Solicitação de lista de espera enviada.</p>}
       {confirmed > 0 && <p className="success" role="status">Seu agendamento foi confirmado.</p>}

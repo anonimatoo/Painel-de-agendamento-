@@ -99,6 +99,39 @@ test('bloqueios concorrem com reservas e reagendamento preserva histórico', asy
     await recoverDelivery()
     assert.equal((await db.reminder.findUniqueOrThrow({ where: { id: message.id } })).deliveryState, 'REVIEW')
     await db.reminder.delete({ where: { id: message.id } })
+    const { reconcileAppointment } = await import('../lib/connect')
+    const account = 'acct_' + randomUUID()
+    const selling = await db.tenant.update({ where: { id: tenant.id }, data: { stripeAccountId: account } })
+    const pending = await book(selling, {
+      ...values, ...customer, online: true, checkoutReturnUrl: 'http://localhost:3000/estabelecimento/teste',
+      startsAt: day.plus({ hours: 11, minutes: 30 }).toUTC().toISO()!
+    })
+    const sessionIds: string[] = []
+    const checkout = { id: 'cs_local_fixture', status: 'open', payment_status: 'unpaid', metadata: { appointmentId: pending.id } }
+    const api = { checkout: { sessions: {
+      create: async (_payload: unknown, options: { idempotencyKey: string }) => {
+        sessionIds.push(options.idempotencyKey)
+        if (sessionIds.length === 1) throw new Error('Rede interrompida após criação')
+        return checkout
+      },
+      retrieve: async () => checkout
+    } } } as unknown as import('stripe').default
+    await assert.rejects(reconcileAppointment(pending, account, api), /Rede interrompida/)
+    const afterFailure = await db.appointment.findUniqueOrThrow({ where: { id: pending.id } })
+    assert.equal(afterFailure.checkoutState, 'CREATING')
+    await reconcileAppointment(afterFailure, account, api)
+    assert.equal((await db.appointment.findUniqueOrThrow({ where: { id: pending.id } })).checkoutId, checkout.id)
+    assert.deepEqual(sessionIds, ['appointment:' + pending.id, 'appointment:' + pending.id])
+    const expired = await db.appointment.update({
+      where: { id: pending.id },
+      data: { checkoutId: null, checkoutState: 'CREATING', expiresAt: new Date(Date.now() - 900_000) }
+    })
+    const unconfirmedApi = { checkout: { sessions: { list: async function* () { yield* [] } } } } as unknown as import('stripe').default
+    await reconcileAppointment(expired, account, unconfirmedApi)
+    const review = await db.appointment.findUniqueOrThrow({ where: { id: pending.id } })
+    assert.equal(review.checkoutState, 'REVIEW')
+    assert.equal(review.status, 'PENDING')
+
 
   } finally {
     await db.reminder.deleteMany({ where: { appointment: { tenantId: tenant.id } } })

@@ -217,6 +217,10 @@ model Appointment {
   consent Boolean @default(false)
   checkoutId String? @unique
   expiresAt DateTime?
+  checkoutReturnUrl String?
+  checkoutAccountId String?
+  checkoutState String?
+  paymentToken String? @unique
   reminders Reminder[]
   history AppointmentHistory[]
   createdAt DateTime @default(now())

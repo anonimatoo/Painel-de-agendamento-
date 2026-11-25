@@ -13,7 +13,7 @@ import { saveStripeConfiguration, stripeConfiguration, stripeClient } from '@/li
 import { subscriptionCheckout } from '@/lib/billing'
 import { connectWhatsApp, logoutWhatsApp, sendWhatsApp, whatsAppStatus } from '@/lib/evolution'
 import { reserveOrder } from '@/lib/orders'
-import { refundAppointment, refundOrder } from '@/lib/connect'
+import { openAppointmentCheckout, reconcileAppointment, refundAppointment, refundOrder } from '@/lib/connect'
 import { stripe } from '@/lib/stripe'
 import { allowAttempt, consumeAccountToken, mailConfigured, sendAccountLink } from '@/lib/account-security'
 import { finishMfaSetup, startMfaSetup, verifyMfa } from '@/lib/mfa'
@@ -422,18 +422,10 @@ export async function reserve(link: string, form: FormData) {
     const online = tenant.onlinePayment && service.cents > 0
     const account = tenant.stripeAccountId
     if (online && (!account || !(await (await stripe()).accounts.retrieve(account)).charges_enabled)) throw new AgendaError('O pagamento está indisponível no momento.')
-    const appointment = await book(tenant, { ...data, consent: form.has('consent'), online })
+    const appointment = await book(tenant, { ...data, consent: form.has('consent'), online, checkoutReturnUrl: base() + path })
     if (!online || !account) return path + '?reserva=' + appointment.id
-    const session = await (await stripe()).checkout.sessions.create({
-      mode: 'payment', payment_method_types: ['card'],
-      line_items: [{ price_data: { currency: 'brl', unit_amount: appointment.chargeCents ?? appointment.cents, product_data: { name: 'Agendamento — ' + tenant.name } }, quantity: 1 }],
-      metadata: { appointmentId: appointment.id },
-      success_url: base() + path + '?reserva=pagamento', cancel_url: base() + path,
-      expires_at: +appointment.expiresAt! / 1000
-    }, { stripeAccount: account, idempotencyKey: 'appointment:' + appointment.id })
-    await db.appointment.updateMany({ where: { id: appointment.id, status: 'PENDING' }, data: { checkoutId: session.id, expiresAt: new Date(session.expires_at * 1000) } })
-    if (!session.url) throw new AgendaError('Não foi possível iniciar o pagamento.')
-    return session.url
+    const session = await openAppointmentCheckout(appointment).catch(() => null)
+    return session?.status === 'open' && session.url ? session.url : path + '?pagamento=' + appointment.paymentToken
   }, path)
 }
 
@@ -488,4 +480,34 @@ export async function shopCheckout(link: string, form: FormData) {
     if (!session.url || session.status !== 'open') return path + '?pedido=' + order.id
     return session.url
   }, path)
+}
+
+export async function retryPayment(link: string, token: string) {
+  const path = '/estabelecimento/' + encodeURIComponent(link)
+  await perform(async () => {
+    const paymentToken = z.uuid().parse(token)
+    const reservation = await db.appointment.findFirst({
+      where: { paymentToken, tenant: { slug: link, active: true, suspended: false } }
+    })
+    if (!reservation) return path
+    if (!await allowAttempt('retry-payment', paymentToken, 12, 600)) return path + '?pagamento=' + paymentToken
+    const session = await openAppointmentCheckout(reservation).catch(() => null)
+    return session?.status === 'open' && session.url ? session.url : path + '?pagamento=' + paymentToken
+  }, path)
+}
+
+export async function reviewPayment(form: FormData) {
+  await perform(async () => {
+    const user = await userSession()
+    const member = user ? await membership(user.id) : null
+    if (!member || !['ADMIN', 'MANAGER'].includes(member.role)) return '/login'
+    const reservation = await db.appointment.findFirst({
+      where: { id: id.parse(form.get('id')), tenantId: member.tenantId, status: 'PENDING' }
+    })
+    const account = reservation?.checkoutAccountId ?? member.tenant.stripeAccountId
+    if (!reservation || !account) throw new AgendaError('Este pagamento está indisponível para consulta.')
+    if (!await allowAttempt('review-payment', member.tenantId, 30, 600)) throw new AgendaError('Aguarde alguns minutos antes de consultar novamente.')
+    await reconcileAppointment(reservation, account, await stripe())
+    return '/recebimentos'
+  }, '/recebimentos')
 }

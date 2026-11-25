@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { DateTime } from 'luxon'
 import { Prisma, Tenant } from '@prisma/client'
 import { db } from './db'
@@ -42,7 +43,7 @@ export async function availability(tenant: Tenant, serviceId: string, profession
   return [...slots.values()].sort((a, b) => a.start.localeCompare(b.start))
 }
 
-export async function book(tenant: Tenant, data: { serviceId: string; professionalId: string; startsAt: string; name: string; phone: string; consent: boolean; online: boolean }) {
+export async function book(tenant: Tenant, data: { serviceId: string; professionalId: string; startsAt: string; name: string; phone: string; consent: boolean; online: boolean; checkoutReturnUrl?: string }) {
   const day = DateTime.fromISO(data.startsAt, { zone: tenant.timezone }).toISODate()
   if (!day) throw new AgendaError('Selecione um horário válido.')
   return db.$transaction(async tx => {
@@ -61,6 +62,10 @@ export async function book(tenant: Tenant, data: { serviceId: string; profession
       tenantId: tenant.id, customerId: customer.id, professionalId: data.professionalId,
       serviceId: data.serviceId, startsAt: slot.start, endsAt: slot.end, cents: service.cents,
       status: data.online ? 'PENDING' : 'CONFIRMED', consent: data.consent,
+      checkoutReturnUrl: data.online ? data.checkoutReturnUrl : undefined,
+      checkoutState: data.online ? 'CREATING' : undefined,
+      checkoutAccountId: data.online ? tenant.stripeAccountId : undefined,
+      paymentToken: data.online ? randomUUID() : undefined,
       chargeCents: data.online ? Math.ceil(service.cents * tenant.depositPercent / 100) : undefined,
       expiresAt: data.online ? new Date(Math.floor(Date.now() / 1000) * 1000 + 35 * 60_000) : undefined
     } })

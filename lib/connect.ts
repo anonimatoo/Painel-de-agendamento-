@@ -2,6 +2,7 @@ import { db } from './db'
 import { settleOrderRefund } from './orders'
 import { settleAppointment, stripe } from './stripe'
 import { AgendaError } from './agenda'
+import type { Appointment } from '@prisma/client'
 import type Stripe from 'stripe'
 
 export async function connectStatus(accountId: string) {
@@ -30,38 +31,67 @@ export async function refundAppointment(tenantId: string, appointmentId: string)
   }
 }
 
+export async function openAppointmentCheckout(reservation: Appointment, api?: Stripe) {
+  const account = reservation.checkoutAccountId
+  if (reservation.status !== 'PENDING' || !account || !reservation.checkoutReturnUrl || !reservation.paymentToken || !reservation.expiresAt) return
+  const stripeApi = api ?? await stripe()
+  if (reservation.checkoutId) return stripeApi.checkout.sessions.retrieve(reservation.checkoutId, { stripeAccount: account })
+  if (reservation.checkoutState === 'REVIEW' || +reservation.expiresAt - Date.now() < 30 * 60_000) return
+  const session = await stripeApi.checkout.sessions.create({
+    mode: 'payment', payment_method_types: ['card'],
+    line_items: [{ price_data: { currency: 'brl', unit_amount: reservation.chargeCents ?? reservation.cents, product_data: { name: 'Pagamento de atendimento' } }, quantity: 1 }],
+    metadata: { appointmentId: reservation.id },
+    success_url: reservation.checkoutReturnUrl + '?pagamento=' + reservation.paymentToken,
+    cancel_url: reservation.checkoutReturnUrl + '?pagamento=' + reservation.paymentToken,
+    expires_at: +reservation.expiresAt / 1000
+  }, { stripeAccount: account, idempotencyKey: 'appointment:' + reservation.id })
+  await db.appointment.updateMany({
+    where: { id: reservation.id, status: 'PENDING', OR: [{ checkoutId: null }, { checkoutId: session.id }] },
+    data: { checkoutId: session.id, checkoutState: 'OPEN' }
+  })
+  return session
+}
+
+export async function reconcileAppointment(reservation: Appointment, account: string, api: Stripe) {
+  let session: Stripe.Checkout.Session | undefined
+  if (reservation.checkoutId) {
+    session = await api.checkout.sessions.retrieve(reservation.checkoutId, { stripeAccount: account })
+  } else {
+    session = await openAppointmentCheckout(reservation, api)
+    if (!session) {
+      for await (const candidate of api.checkout.sessions.list({
+        created: { gte: Math.floor(+reservation.createdAt / 1000) - 10 }, limit: 100
+      }, { stripeAccount: account })) {
+        if (candidate.metadata?.appointmentId === reservation.id) { session = candidate; break }
+      }
+    }
+  }
+  if (session) {
+    const evidence = session
+    await db.$transaction(tx => settleAppointment(tx, account, evidence, evidence.status === 'expired'))
+  } else if (!reservation.expiresAt || +reservation.expiresAt <= Date.now()) {
+    await db.appointment.updateMany({ where: { id: reservation.id, status: 'PENDING', checkoutId: null }, data: { checkoutState: 'REVIEW' } })
+  }
+}
+
 export async function reconcileAppointments() {
-  const now = new Date()
   const pending = await db.appointment.findMany({
-    where: { status: 'PENDING', expiresAt: { lte: now }, tenant: { stripeAccountId: { not: null } } },
+    where: { status: 'PENDING', tenant: { stripeAccountId: { not: null } }, OR: [
+      { checkoutState: 'CREATING' },
+      { checkoutState: 'OPEN', expiresAt: { lte: new Date() } }
+    ] },
     orderBy: { expiresAt: 'asc' }, take: 25,
-    select: { id: true, checkoutId: true, createdAt: true, expiresAt: true, tenant: { select: { stripeAccountId: true } } }
+    include: { tenant: { select: { stripeAccountId: true } } }
   })
   if (!pending.length) return
   const api = await stripe()
   for (const reservation of pending) {
-    const account = reservation.tenant.stripeAccountId!
     try {
-      let session: Stripe.Checkout.Session | undefined
-      if (reservation.checkoutId) {
-        session = await api.checkout.sessions.retrieve(reservation.checkoutId, { stripeAccount: account })
-      } else {
-        for await (const candidate of api.checkout.sessions.list({
-          created: { gte: Math.floor(+reservation.createdAt / 1000) - 10, lte: Math.floor(+reservation.expiresAt! / 1000) },
-          limit: 100
-        }, { stripeAccount: account })) {
-          if (candidate.metadata?.appointmentId === reservation.id) { session = candidate; break }
-        }
-      }
-      if (session) {
-        await db.$transaction(tx => settleAppointment(tx, account, session, session.status === 'expired'))
-      } else if (+now - +reservation.expiresAt! > 10 * 60_000) {
-        await db.appointment.updateMany({
-          where: { id: reservation.id, status: 'PENDING', checkoutId: null },
-          data: { status: 'CANCELED' }
-        })
-      }
+      await reconcileAppointment(reservation, reservation.checkoutAccountId ?? reservation.tenant.stripeAccountId!, api)
     } catch {
+      if (reservation.expiresAt && +reservation.expiresAt <= Date.now()) {
+        await db.appointment.updateMany({ where: { id: reservation.id, status: 'PENDING', checkoutState: 'CREATING' }, data: { checkoutState: 'REVIEW' } })
+      }
       console.error('appointment-reconciliation', reservation.id)
     }
   }

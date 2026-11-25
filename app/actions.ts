@@ -8,6 +8,7 @@ import { endSession, hashPassword, membership, startSession, userSession, verify
 import { AgendaError, book } from '@/lib/agenda'
 import { saveStripeConfiguration, stripeConfiguration, stripeClient } from '@/lib/stripe-settings'
 import { subscriptionCheckout } from '@/lib/billing'
+import { connectWhatsApp, logoutWhatsApp, sendWhatsApp, whatsAppStatus } from '@/lib/evolution'
 import { refundAppointment } from '@/lib/connect'
 import { stripe } from '@/lib/stripe'
 import { allowAttempt, consumeAccountToken, mailConfigured, sendAccountLink } from '@/lib/account-security'
@@ -129,6 +130,7 @@ export async function manage(operation: string, form: FormData) {
         const data = z.object({
           name: title, description: text, address: text, color: z.string().regex(/^#[\da-f]{6}$/i),
           depositPercent: z.coerce.number().int().min(1).max(100).default(100),
+          reminderTemplate: z.string().trim().max(500).default(''),
           reminderMinutes: z.coerce.number().int().min(0).max(10080)
         }).parse(body)
         const onlinePayment = form.has('onlinePayment')
@@ -136,7 +138,7 @@ export async function manage(operation: string, form: FormData) {
           throw new AgendaError('Conclua a configuração da conta para aceitar pagamentos.')
         }
         await db.tenant.update({ where: { id: tenantId }, data: {
-          ...data, reminderMinutes: data.reminderMinutes || null,
+          ...data, reminderTemplate: data.reminderTemplate || null, reminderMinutes: data.reminderMinutes || null,
           onlinePayment
         } })
         break
@@ -204,6 +206,37 @@ export async function manage(operation: string, form: FormData) {
   }, '/dashboard')
 }
 
+export async function whatsappControl(_previous: { message?: string; qr?: string }, form: FormData): Promise<{ message?: string; qr?: string }> {
+  try {
+    const user = await userSession()
+    const member = user ? await membership(user.id) : null
+    const instance = member?.tenant.whatsappInstance
+    if (!member || member.role !== 'ADMIN' || !member.tenant.active || member.tenant.suspended || !instance) {
+      return { message: 'A conexão do WhatsApp ainda não está disponível para esta conta.' }
+    }
+    const operation = z.enum(['status', 'connect', 'logout', 'test']).parse(form.get('operation'))
+    if (!(await allowAttempt('whatsapp-' + operation, member.tenantId, operation === 'test' ? 3 : 12, 300))) {
+      return { message: 'Aguarde alguns minutos antes de tentar novamente.' }
+    }
+    if (operation === 'connect') {
+      const result = await connectWhatsApp(instance)
+      return { qr: result.qr, message: result.connected ? 'WhatsApp conectado.' : result.qr ? 'Abra os dispositivos conectados do WhatsApp e escaneie o código.' : 'Aguardando o código. Tente novamente em instantes.' }
+    }
+    if (operation === 'logout') {
+      await logoutWhatsApp(instance)
+      return { message: 'WhatsApp desconectado.' }
+    }
+    if (operation === 'test') {
+      await sendWhatsApp(instance, phone.parse(form.get('phone')), 'Mensagem de teste do CS Agenda Pro.')
+      return { message: 'Mensagem de teste enviada ao WhatsApp.' }
+    }
+    const state = await whatsAppStatus(instance)
+    return { message: state === 'open' ? 'WhatsApp conectado.' : state === 'connecting' ? 'Conexão em andamento.' : 'WhatsApp desconectado.' }
+  } catch (error) {
+    return { message: error instanceof z.ZodError ? 'Confira os dados informados e tente novamente.' : 'Não foi possível concluir a operação no WhatsApp.' }
+  }
+}
+
 export async function admin(operation: 'plan' | 'suspend' | 'whatsapp' | 'stripe-config' | 'stripe-test', form: FormData) {
   await perform(async () => {
     const user = await userSession()
@@ -241,7 +274,10 @@ export async function admin(operation: 'plan' | 'suspend' | 'whatsapp' | 'stripe
       await db.plan.create({ data: { ...data, monthlyPriceId: monthly.id, annualPriceId: annual.id } })
     } else if (operation === 'whatsapp') {
       const data = z.object({ tenantId: id, instance: z.string().trim().regex(/^[\w-]{0,70}$/) }).parse(body)
-      await db.tenant.update({ where: { id: data.tenantId }, data: { whatsappInstance: data.instance || null } })
+      await db.$transaction([
+        db.tenant.update({ where: { id: data.tenantId }, data: { whatsappInstance: data.instance || null } }),
+        db.adminAudit.create({ data: { actorId: user.id, action: 'WHATSAPP_LINK_UPDATED', targetId: data.tenantId } })
+      ])
     } else {
       const data = z.object({ tenantId: id, suspended: z.enum(['true', 'false']) }).parse(body)
       await db.$transaction([

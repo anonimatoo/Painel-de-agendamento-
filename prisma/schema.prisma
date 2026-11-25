@@ -51,6 +51,7 @@ model Tenant {
   onlinePayment Boolean @default(false)
   depositPercent Int @default(100)
   whatsappInstance String? @unique
+  reminderTemplate String?
   reminderMinutes Int?
   members Member[]
   services Service[]

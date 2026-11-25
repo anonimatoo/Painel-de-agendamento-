@@ -5,6 +5,7 @@ import { DateTime } from 'luxon'
 import { connectStatus } from '@/lib/connect'
 import { db } from '@/lib/db'
 import { membership, userSession } from '@/lib/auth'
+import { WhatsAppControls } from '../whatsapp-controls'
 import { logout, manage } from '../actions'
 import { Brand, ErrorNote, Field, brl } from '../ui'
 
@@ -105,6 +106,7 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
           <Field label="Nome" name="name" value={tenant.name} /><Field label="Descrição" name="description" value={tenant.description} required={false} />
           <Field label="Endereço" name="address" value={tenant.address} required={false} /><Field label="Cor da página" name="color" type="color" value={tenant.color} />
           {tenant.whatsappInstance && <Field label="Enviar lembrete quantos minutos antes? (0 desativa)" name="reminderMinutes" type="number" min={0} value={tenant.reminderMinutes ?? 0} />}
+          {tenant.whatsappInstance && <Field label="Mensagem do lembrete. Use {estabelecimento} e {horario} para preencher automaticamente." name="reminderTemplate" required={false} value={tenant.reminderTemplate ?? ''} />}
           {!tenant.whatsappInstance && <input type="hidden" name="reminderMinutes" value="0" />}
           {tenant.stripeAccountId && <label className="check"><input type="checkbox" name="onlinePayment" defaultChecked={tenant.onlinePayment} /> Exigir pagamento online</label>}
           {tenant.stripeAccountId && <Field label="Percentual cobrado antecipadamente" name="depositPercent" type="number" min={1} max={100} value={tenant.depositPercent} />}
@@ -113,6 +115,7 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
           <label>Imagem de capa<input type="file" name="cover" accept="image/jpeg,image/png,image/webp" required /></label>
           <button className="outline">Salvar imagem</button>
         </form>{tenant.stripeAccountId && <p>{connect ? (connect.payments ? 'Cobranças habilitadas' : connect.submitted ? 'Cadastro em análise' : 'Cadastro incompleto') + ' · ' + (connect.payouts ? 'Repasses habilitados' : 'Repasses indisponíveis') : 'Situação da conta de pagamentos indisponível.'}</p>}<form action={manage.bind(null, 'connect')}><button className="outline">{tenant.stripeAccountId ? 'Revisar configuração de pagamentos' : 'Configurar pagamentos online'}</button></form>
+        {tenant.whatsappInstance && <><h3>WhatsApp</h3><WhatsAppControls /></>}
       </article>}
       {role === 'ADMIN' && tenant.stripeCustomerId && <article><h2>Cobrança</h2><Link href="/assinatura">Ver faturas da assinatura</Link><form action={manage.bind(null, 'portal')}><button className="outline">Gerenciar assinatura</button></form></article>}
     </main></div>

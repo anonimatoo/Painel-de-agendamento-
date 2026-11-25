@@ -2,7 +2,7 @@ import { Queue, Worker } from 'bullmq'
 import { DateTime } from 'luxon'
 import { reconcileAppointments } from '../lib/connect'
 import { db } from '../lib/db'
-import { sendWhatsApp } from '../lib/evolution'
+import { reminderMessage, sendWhatsApp } from '../lib/evolution'
 
 const url = new URL(process.env.REDIS_URL ?? 'redis://localhost:56379')
 const connection = {
@@ -30,7 +30,7 @@ const worker = new Worker('agenda-reminders', async job => {
   if (!claimed.count) return
   try {
     const time = DateTime.fromJSDate(appointment.startsAt, { zone: tenant.timezone }).toFormat("dd/LL 'às' HH:mm")
-    await sendWhatsApp(tenant.whatsappInstance, appointment.customer.phone, 'Olá! Seu atendimento em ' + tenant.name + ' está marcado para ' + time + '.')
+    await sendWhatsApp(tenant.whatsappInstance, appointment.customer.phone, reminderMessage(tenant.reminderTemplate, tenant.name, time))
     await db.reminder.update({ where: { id: reminder.id }, data: { sentAt: new Date(), claimedAt: null } })
   } catch (error) {
     await db.reminder.updateMany({ where: { id: reminder.id, claimedAt: now }, data: { claimedAt: null } })

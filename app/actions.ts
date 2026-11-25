@@ -549,3 +549,43 @@ export async function saveWhatsAppPreferences(form: FormData) {
     return '/whatsapp'
   }, '/whatsapp')
 }
+
+export async function createTeamInvite(_previous: { link?: string; message?: string }, form: FormData): Promise<{ link?: string; message?: string }> {
+  try {
+    const user = await userSession()
+    const member = user ? await membership(user.id) : null
+    if (!user || !member || member.role !== 'ADMIN' || !member.tenant.active || member.tenant.suspended) return { message: 'Acesso indisponível.' }
+    if (!await allowAttempt('team-invite', member.tenantId, 20, 3600)) return { message: 'Aguarde antes de criar outro convite.' }
+    const { inviteMember } = await import('@/lib/team')
+    const values = z.object({ email: credentials.shape.email, role: z.enum(['MANAGER', 'RECEPTION', 'PROFESSIONAL']), professionalId: z.string().max(100).optional() }).parse(Object.fromEntries(form))
+    const token = await inviteMember(member.tenantId, user.id, values.email, values.role, values.professionalId)
+    return { link: base() + '/convite?codigo=' + token }
+  } catch (error) {
+    return { message: error instanceof AgendaError ? error.message : 'Não foi possível criar o convite. Confira os dados informados.' }
+  }
+}
+
+export async function finishTeamInvite(form: FormData) {
+  await perform(async () => {
+    const token = z.string().regex(/^[\w-]{43}$/).parse(form.get('code'))
+    const password = credentials.shape.password.parse(form.get('password'))
+    if (!await allowAttempt('team-accept', token, 8, 600)) throw new AgendaError('Aguarde antes de tentar novamente.')
+    const { acceptInvite } = await import('@/lib/team')
+    const user = await acceptInvite(token, password)
+    await startSession(user.id)
+    if (mailConfigured()) await sendAccountLink(user, 'EMAIL_VERIFY').catch(() => console.error('team-email-verification'))
+    return '/dashboard'
+  }, '/convite')
+}
+
+export async function teamAccess(form: FormData) {
+  await perform(async () => {
+    const user = await userSession()
+    const member = user ? await membership(user.id) : null
+    if (!user || !member || member.role !== 'ADMIN' || !member.tenant.active || member.tenant.suspended) return '/dashboard'
+    const { manageTeamAccess } = await import('@/lib/team')
+    const values = z.object({ userId: id, state: z.enum(['disable', 'enable', 'revoke']) }).parse(Object.fromEntries(form))
+    await manageTeamAccess(member.tenantId, user.id, values.userId, values.state)
+    return '/equipe'
+  }, '/equipe')
+}

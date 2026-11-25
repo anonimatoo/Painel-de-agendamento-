@@ -18,6 +18,7 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
   const member = await membership(user.id)
   if (!member) redirect(user.platformAdmin ? '/super-admin' : '/')
   const { tenant, role } = member
+  const own = role === 'PROFESSIONAL' ? member.professionalId : null
   const enabled = tenant.active && !tenant.suspended
   const manager = role === 'ADMIN' || role === 'MANAGER'
   const desk = manager || role === 'RECEPTION'
@@ -30,8 +31,8 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
     enabled && manager ? db.professional.findMany({ where: { tenantId }, orderBy: { name: 'asc' }, include: { hours: true, assignments: { include: { service: true } } } }) : [],
     enabled && desk ? db.customer.findMany({ where: { tenantId }, orderBy: { name: 'asc' }, take: 100 }) : [],
     enabled && manager ? db.product.findMany({ where: { tenantId }, orderBy: { name: 'asc' } }) : [],
-    enabled && desk ? db.appointment.findMany({
-      where: { tenantId, startsAt: { gte: month.toJSDate() } }, orderBy: { startsAt: 'asc' }, take: 100,
+    enabled && (desk || own) ? db.appointment.findMany({
+      where: { tenantId, ...(own ? { professionalId: own } : {}), startsAt: { gte: month.toJSDate() } }, orderBy: { startsAt: 'asc' }, take: 100,
       include: { service: true, customer: true, professional: true }
     }) : [],
     enabled && desk ? db.appointment.count({ where: { tenantId, status: { in: ['CONFIRMED','COMPLETED'] }, startsAt: { gte: month.toJSDate(), lt: month.plus({ months: 1 }).toJSDate() } } }) : 0,
@@ -45,7 +46,7 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
       {enabled && manager && <Link href="/comercial"><Wallet /> Estoque e financeiro</Link>}
       {enabled && manager && <a href="#equipe"><UsersRound /> Equipe e catálogo</a>}
       {enabled && role === 'ADMIN' && <a href="#configuracoes"><Settings /> Configurações</a>}
-    {enabled && role === 'ADMIN' && <Link href="/whatsapp">WhatsApp</Link>}<Link href="/conta">Minha conta</Link></nav><form action={logout}><button className="subtle">Sair</button></form></aside>
+    {enabled && role === 'ADMIN' && <Link href="/equipe">Equipe e permissões</Link>}{enabled && role === 'ADMIN' && <Link href="/whatsapp">WhatsApp</Link>}<Link href="/conta">Minha conta</Link></nav><form action={logout}><button className="subtle">Sair</button></form></aside>
     <main className="content">
       <div className="row"><div><p className="eyebrow">Estabelecimento</p><h1>{tenant.name}</h1></div>
         {enabled && <Link className="button outline" href={'/estabelecimento/' + tenant.slug}>Ver página pública</Link>}</div>
@@ -57,6 +58,9 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
           <input type="hidden" name="planId" value={plan.id} /><label>{plan.name}<select name="cycle"><option value="monthly">{brl(plan.monthlyCents)} por mês</option><option value="annual">{brl(plan.annualCents)} por ano</option></select></label><button>Assinar</button>
         </form>)}
       </article>}
+      {enabled && own && <article><h2>Meus atendimentos</h2>{appointments.length ? <ul>{appointments.map(item => <li key={item.id}>
+        {DateTime.fromJSDate(item.startsAt, { zone: tenant.timezone }).toFormat('dd/LL/yyyy HH:mm')} · {item.customer.name} · {item.service.name} · {labels[item.status]}
+      </li>)}</ul> : <p>Nenhum atendimento na sua agenda.</p>}</article>}
       {enabled && desk && <>
         <section className="grid metrics">
           <article><CalendarDays /><p>Atendimentos no mês</p><strong>{monthlyCount}</strong></article>

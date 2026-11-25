@@ -61,3 +61,31 @@ test('Super Admin usa código de segundo fator apenas uma vez', async () => {
     else process.env.CREDENTIAL_ENCRYPTION_KEY = previousKey
   }
 })
+
+test('convite de profissional limita o vínculo ao estabelecimento e encerramento revoga sessão', async () => {
+  const { acceptInvite, inviteMember, manageTeamAccess } = await import('../lib/team')
+  const { membership } = await import('../lib/auth')
+  const first = await db.tenant.create({ data: { slug: randomUUID(), name: 'Equipe', active: true } })
+  const second = await db.tenant.create({ data: { slug: randomUUID(), name: 'Outra equipe', active: true } })
+  const email = randomUUID() + '@example.test'
+  try {
+    const professional = await db.professional.create({ data: { tenantId: first.id, name: 'Profissional' } })
+    await assert.rejects(inviteMember(second.id, 'actor', email, 'PROFESSIONAL', professional.id))
+    const token = await inviteMember(first.id, 'actor', email, 'PROFESSIONAL', professional.id)
+    const users = await Promise.allSettled([acceptInvite(token, 'Senha-forte-local'), acceptInvite(token, 'Senha-forte-local')])
+    const accepted = users.filter(result => result.status === 'fulfilled')
+    assert.equal(accepted.length, 1)
+    const user = accepted[0].value
+    assert.equal((await membership(user.id))?.professionalId, professional.id)
+    await db.session.create({ data: { tokenHash: randomUUID(), userId: user.id, expiresAt: new Date(Date.now() + 60_000) } })
+    await assert.rejects(manageTeamAccess(second.id, 'actor', user.id, 'disable'))
+    await manageTeamAccess(first.id, 'actor', user.id, 'disable')
+    assert.equal(await membership(user.id), null)
+    assert.equal(await db.session.count({ where: { userId: user.id } }), 0)
+  } finally {
+    await db.user.deleteMany({ where: { email } })
+    await db.teamInvite.deleteMany({ where: { tenantId: first.id } })
+    await db.professional.deleteMany({ where: { tenantId: first.id } })
+    await db.tenant.deleteMany({ where: { id: { in: [first.id, second.id] } } })
+  }
+})

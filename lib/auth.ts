@@ -42,5 +42,5 @@ export async function endSession() {
 }
 
 export async function membership(userId: string) {
-  return db.member.findFirst({ where: { userId }, include: { tenant: true }, orderBy: { tenantId: 'asc' } })
+  return db.member.findFirst({ where: { userId, disabledAt: null }, include: { tenant: true }, orderBy: { tenantId: 'asc' } })
 }

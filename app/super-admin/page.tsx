@@ -10,16 +10,25 @@ export default async function SuperAdmin({ searchParams }: { searchParams: Promi
   if (!user?.platformAdmin) redirect('/login')
   if (!user.adminMfaVerified) redirect(user.mfaSecret ? '/login' : '/conta')
   const query = await searchParams
-  const [tenants, plans, stripeSettings] = await Promise.all([
+  const date = (value: Date) => new Intl.DateTimeFormat('pt-BR', { timeZone: 'America/Sao_Paulo', dateStyle: 'short', timeStyle: 'short' }).format(value)
+  const [tenants, plans, stripeSettings, billingEvent, connectEvent, changes] = await Promise.all([
     db.tenant.findMany({ orderBy: { createdAt: 'desc' }, take: 100, include: { subscriptions: { include: { plan: true } } } }),
     db.plan.findMany({ orderBy: { monthlyCents: 'asc' } }),
-    db.stripeSettings.findUnique({ where: { id: 1 }, select: { mode: true } })
+    db.stripeSettings.findUnique({ where: { id: 1 }, select: { mode: true, paused: true, checkedAt: true, checkSucceeded: true, paymentsEnabled: true, payoutsEnabled: true } }),
+    db.webhookEvent.findFirst({ where: { source: 'billing' }, orderBy: { createdAt: 'desc' }, select: { createdAt: true } }),
+    db.webhookEvent.findFirst({ where: { source: 'connect' }, orderBy: { createdAt: 'desc' }, select: { createdAt: true } }),
+    db.adminAudit.findMany({ where: { action: { startsWith: 'STRIPE_' } }, orderBy: { createdAt: 'desc' }, take: 15, select: { action: true, createdAt: true } })
   ])
   return <div className="shell"><aside><Brand /><nav><Link href="/super-admin">Administração</Link><a href="#assinantes">Assinantes</a><a href="#planos">Planos</a><Link href="/conta">Minha conta</Link></nav><form action={logout}><button className="subtle">Sair</button></form></aside>
     <main className="content"><h1>Administração da plataforma</h1><ErrorNote error={query.erro} />
       {query.stripe === 'conectada' && <p role="status" className="success">Conexão com a Stripe confirmada.</p>}
       <article><h2>Configuração da Stripe</h2>
         {stripeSettings && <p>Ambiente configurado · {stripeSettings.mode === 'live' ? 'Produção' : 'Teste'}</p>}
+        {stripeSettings && <p>{stripeSettings.paused ? 'Novas cobranças desconectadas' : 'Novas cobranças habilitadas nas preferências'}</p>}
+        {stripeSettings?.checkedAt && <p>Última verificação · {date(stripeSettings.checkedAt)} · {stripeSettings.checkSucceeded ? 'Conexão confirmada' : 'Conexão indisponível'}</p>}
+        {stripeSettings?.checkSucceeded && <p>{stripeSettings.paymentsEnabled ? 'Recebimentos habilitados' : 'Recebimentos indisponíveis'} · {stripeSettings.payoutsEnabled ? 'Repasses habilitados' : 'Repasses indisponíveis'}</p>}
+        <p>Última notificação de assinatura · {billingEvent ? date(billingEvent.createdAt) : 'Nenhuma recebida'}</p>
+        <p>Última notificação de pagamento · {connectEvent ? date(connectEvent.createdAt) : 'Nenhuma recebida'}</p>
         <details><summary>Atualizar credenciais</summary>
           <form action={admin.bind(null, 'stripe-config')}>
             <label>Ambiente<select name="mode" defaultValue={stripeSettings?.mode ?? 'test'}><option value="test">Teste</option><option value="live">Produção</option></select></label>
@@ -33,6 +42,16 @@ export default async function SuperAdmin({ searchParams }: { searchParams: Promi
         <details><summary>Verificar conexão</summary><form action={admin.bind(null, 'stripe-test')}>
           <Field label="Sua senha" name="password" type="password" /><button>Testar conexão</button>
         </form></details>
+        {stripeSettings && <details><summary>{stripeSettings.paused ? 'Reconectar novos pagamentos' : 'Desconectar novos pagamentos'}</summary>
+          <p>Cobranças existentes continuam sendo acompanhadas.</p>
+          <form action={admin.bind(null, 'stripe-pause')}>
+            <input type="hidden" name="paused" value={String(!stripeSettings.paused)} />
+            <Field label="Sua senha" name="password" type="password" /><button>{stripeSettings.paused ? 'Reconectar' : 'Desconectar'}</button>
+          </form>
+        </details>}
+        {changes.length > 0 && <details><summary>Histórico da configuração</summary><ul>{changes.map((change, index) => <li key={index}>
+          {date(change.createdAt)} · {({ STRIPE_CONFIG_UPDATED: 'Credenciais atualizadas', STRIPE_CHECK_OK: 'Conexão verificada', STRIPE_CHECK_FAILED: 'Falha na verificação', STRIPE_PAUSED: 'Novas cobranças desconectadas', STRIPE_RESUMED: 'Novas cobranças reconectadas' } as Record<string,string>)[change.action] ?? 'Alteração registrada'}
+        </li>)}</ul></details>}
       </article>
       <article id="assinantes"><h2>Assinantes</h2>{!tenants.length ? <p>Nenhum estabelecimento cadastrado.</p> : <div className="scroll"><table>
         <thead><tr><th>Estabelecimento</th><th>Acesso</th><th>Assinaturas</th><th>Ação</th><th>WhatsApp</th></tr></thead>

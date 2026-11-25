@@ -320,6 +320,11 @@ model StripeSettings {
   publishableKey String
   mode String
   encrypted String
+  paused Boolean @default(false)
+  checkedAt DateTime?
+  checkSucceeded Boolean?
+  paymentsEnabled Boolean?
+  payoutsEnabled Boolean?
   updatedAt DateTime @updatedAt
 }
 

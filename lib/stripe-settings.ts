@@ -14,13 +14,13 @@ export async function stripeConfiguration() {
   if (configuration) {
     return {
       ...JSON.parse(unseal(configuration.encrypted, 'stripe:' + configuration.accountId + ':' + configuration.mode)) as Credentials,
-      mode: configuration.mode
+      mode: configuration.mode, paused: configuration.paused
     }
   }
   const secret = process.env.STRIPE_SECRET_KEY
   if (!secret) throw new Error('Stripe configuration missing')
   return {
-    secret, mode: secret.startsWith('sk_live_') || secret.startsWith('rk_live_') ? 'live' : 'test',
+    secret, paused: false, mode: secret.startsWith('sk_live_') || secret.startsWith('rk_live_') ? 'live' : 'test',
     billingWebhook: process.env.STRIPE_WEBHOOK_SECRET, connectWebhook: process.env.STRIPE_CONNECT_WEBHOOK_SECRET
   }
 }
@@ -46,8 +46,46 @@ export async function saveStripeConfiguration(actorId: string, mode: 'test' | 'l
         throw new AgendaError('Já existem cobranças vinculadas à conta atual. Use a mesma conta e ambiente para atualizar as chaves.')
       }
     }
-    const settings = { accountId: account.id, mode, publishableKey, encrypted: seal(JSON.stringify(credentials), 'stripe:' + account.id + ':' + mode) }
+    const settings = {
+      accountId: account.id, mode, publishableKey, checkedAt: new Date(), checkSucceeded: true,
+      paymentsEnabled: account.charges_enabled, payoutsEnabled: account.payouts_enabled,
+      encrypted: seal(JSON.stringify(credentials), 'stripe:' + account.id + ':' + mode)
+    }
     await tx.stripeSettings.upsert({ where: { id: 1 }, create: { id: 1, ...settings }, update: settings })
     await tx.adminAudit.create({ data: { actorId, action: 'STRIPE_CONFIG_UPDATED', targetId: account.id } })
   }, { timeout: 20_000 })
+}
+
+export async function stripeForNewPayments() {
+  const config = await stripeConfiguration()
+  if (config.paused) throw new AgendaError('Novas cobranças estão temporariamente indisponíveis.')
+  return stripeClient(config.secret)
+}
+
+export async function checkStripeConnection(actorId: string) {
+  const before = await db.stripeSettings.findUnique({ where: { id: 1 } })
+  const config = await stripeConfiguration()
+  const account = await stripeClient(config.secret).accounts.retrieve().catch(() => null)
+  if (before) {
+    await db.$transaction([
+      db.stripeSettings.updateMany({
+        where: { id: 1, encrypted: before.encrypted },
+        data: { checkedAt: new Date(), checkSucceeded: Boolean(account),
+          paymentsEnabled: account?.charges_enabled ?? null, payoutsEnabled: account?.payouts_enabled ?? null }
+      }),
+      db.adminAudit.create({ data: { actorId, targetId: before.accountId, action: account ? 'STRIPE_CHECK_OK' : 'STRIPE_CHECK_FAILED' } })
+    ])
+  }
+  if (!account) throw new AgendaError('Não foi possível consultar a conexão com a Stripe.')
+}
+
+export async function pauseStripePayments(actorId: string, paused: boolean) {
+  await db.$transaction(async tx => {
+    const current = await tx.stripeSettings.findUnique({ where: { id: 1 } })
+    if (!current) throw new AgendaError('Salve as credenciais no painel antes de alterar o recebimento de novas cobranças.')
+    await tx.stripeSettings.update({ where: { id: 1 }, data: { paused } })
+    await tx.adminAudit.create({
+      data: { actorId, action: paused ? 'STRIPE_PAUSED' : 'STRIPE_RESUMED', targetId: current.accountId }
+    })
+  })
 }

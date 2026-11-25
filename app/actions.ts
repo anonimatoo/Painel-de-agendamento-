@@ -9,7 +9,7 @@ import { Prisma } from '@prisma/client'
 import { db } from '@/lib/db'
 import { endSession, hashPassword, membership, startSession, userSession, verifyPassword } from '@/lib/auth'
 import { AgendaError, blockSchedule, book, closeAppointment, dayBounds, localDateTime, rescheduleAppointment } from '@/lib/agenda'
-import { saveStripeConfiguration, stripeConfiguration, stripeClient } from '@/lib/stripe-settings'
+import { checkStripeConnection, pauseStripePayments, saveStripeConfiguration, stripeForNewPayments } from '@/lib/stripe-settings'
 import { subscriptionCheckout } from '@/lib/billing'
 import { connectWhatsApp, logoutWhatsApp, sendWhatsApp, whatsAppStatus } from '@/lib/evolution'
 import { reserveOrder } from '@/lib/orders'
@@ -235,7 +235,7 @@ export async function manage(operation: string, form: FormData) {
       }
       case 'connect': {
         if (member.role !== 'ADMIN') throw new AgendaError('Seu acesso não permite esta operação.')
-        const api = await stripe()
+        const api = await stripeForNewPayments()
         const account = tenant.stripeAccountId ?? (await api.accounts.create({
           country: 'BR', type: 'express', email: user.email,
           capabilities: { card_payments: { requested: true }, transfers: { requested: true } }
@@ -357,20 +357,24 @@ export async function whatsappControl(_previous: { message?: string; qr?: string
   }
 }
 
-export async function admin(operation: 'plan' | 'suspend' | 'whatsapp' | 'stripe-config' | 'stripe-test', form: FormData) {
+export async function admin(operation: 'plan' | 'suspend' | 'whatsapp' | 'stripe-config' | 'stripe-test' | 'stripe-pause', form: FormData) {
   await perform(async () => {
     const user = await userSession()
     if (!user?.platformAdmin) return '/login'
     if (!user.adminMfaVerified) return user.mfaSecret ? '/login' : '/conta'
     const body = Object.fromEntries(form)
-    if (operation === 'stripe-config' || operation === 'stripe-test') {
+    if (operation === 'stripe-config' || operation === 'stripe-test' || operation === 'stripe-pause') {
       const password = credentials.shape.password.parse(form.get('password'))
       if (!(await allowAttempt('stripe-config', user.id, 6, 600)) || !(await verifyPassword(password, user.password))) {
         throw new AgendaError('Não foi possível confirmar sua senha.')
       }
       if (operation === 'stripe-test') {
-        await stripeClient((await stripeConfiguration()).secret).accounts.retrieve()
+        await checkStripeConnection(user.id)
         return '/super-admin?stripe=conectada'
+      }
+      if (operation === 'stripe-pause') {
+        await pauseStripePayments(user.id, z.enum(['true', 'false']).parse(form.get('paused')) === 'true')
+        return '/super-admin'
       }
       const data = z.object({
         mode: z.enum(['test', 'live']),
@@ -386,7 +390,7 @@ export async function admin(operation: 'plan' | 'suspend' | 'whatsapp' | 'stripe
     }
     if (operation === 'plan') {
       const data = z.object({ name: title, description: title, monthlyCents: cents.min(100), annualCents: cents.min(100), trialDays: z.coerce.number().int().min(0).max(90).default(0) }).parse(body)
-      const api = await stripe()
+      const api = await stripeForNewPayments()
       const product = await api.products.create({ name: data.name, description: data.description })
       const [monthly, annual] = await Promise.all([
         api.prices.create({ product: product.id, unit_amount: data.monthlyCents, currency: 'brl', recurring: { interval: 'month' } }),
@@ -421,7 +425,7 @@ export async function reserve(link: string, form: FormData) {
     if (!service) throw new AgendaError('Serviço indisponível.')
     const online = tenant.onlinePayment && service.cents > 0
     const account = tenant.stripeAccountId
-    if (online && (!account || !(await (await stripe()).accounts.retrieve(account)).charges_enabled)) throw new AgendaError('O pagamento está indisponível no momento.')
+    if (online && (!account || !(await (await stripeForNewPayments()).accounts.retrieve(account)).charges_enabled)) throw new AgendaError('O pagamento está indisponível no momento.')
     const appointment = await book(tenant, { ...data, consent: form.has('consent'), online, checkoutReturnUrl: base() + path })
     if (!online || !account) return path + '?reserva=' + appointment.id
     const session = await openAppointmentCheckout(appointment).catch(() => null)
@@ -459,7 +463,7 @@ export async function shopCheckout(link: string, form: FormData) {
     const tenant = await db.tenant.findFirst({ where: { slug: link, active: true, suspended: false, stripeAccountId: { not: null } } })
     if (!tenant?.stripeAccountId) throw new AgendaError('Compras online indisponíveis.')
     const account = tenant.stripeAccountId
-    const api = await stripe()
+    const api = await stripeForNewPayments()
     if (!(await api.accounts.retrieve(account)).charges_enabled) throw new AgendaError('Compras online indisponíveis.')
     if (!(await allowAttempt('shop-checkout', tenant.id + ':' + values.phone, 6, 1800))) throw new AgendaError('Aguarde antes de iniciar outro pedido.')
     const count = z.coerce.number().int().min(0).max(100)

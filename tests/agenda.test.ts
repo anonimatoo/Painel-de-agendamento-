@@ -86,7 +86,22 @@ test('bloqueios concorrem com reservas e reagendamento preserva histórico', asy
     const moved = await rescheduleAppointment(tenant, appointment.id, new Date(slots[2].start), 'tester')
     assert.equal(moved.startsAt.toISOString(), slots[2].start)
     assert.equal(await db.appointmentHistory.count({ where: { appointmentId: appointment.id, operation: 'RESCHEDULED' } }), 1)
+    const { deliverMessage, recoverDelivery } = await import('../lib/delivery')
+    const message = await db.reminder.create({ data: { appointmentId: appointment.id, runAt: new Date() } })
+    let sends = 0
+    const send = async () => { sends++; throw new Error('Resultado desconhecido') }
+    await Promise.all([deliverMessage(message.id, send), deliverMessage(message.id, send)])
+    assert.equal(sends, 1)
+    assert.equal((await db.reminder.findUniqueOrThrow({ where: { id: message.id } })).deliveryState, 'REVIEW')
+    await deliverMessage(message.id, send)
+    assert.equal(sends, 1)
+    await db.reminder.update({ where: { id: message.id }, data: { deliveryState: 'SENDING', claimedAt: new Date(Date.now() - 180_000) } })
+    await recoverDelivery()
+    assert.equal((await db.reminder.findUniqueOrThrow({ where: { id: message.id } })).deliveryState, 'REVIEW')
+    await db.reminder.delete({ where: { id: message.id } })
+
   } finally {
+    await db.reminder.deleteMany({ where: { appointment: { tenantId: tenant.id } } })
     await db.appointment.deleteMany({ where: { tenantId: tenant.id } })
     await db.customer.deleteMany({ where: { tenantId: tenant.id } })
     await db.scheduleBlock.deleteMany({ where: { tenantId: tenant.id } })

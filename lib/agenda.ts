@@ -131,7 +131,7 @@ export async function rescheduleAppointment(tenant: Tenant, id: string, startsAt
     await tx.appointmentHistory.create({
       data: { appointmentId: id, actorId, operation: 'RESCHEDULED', previousStart: result.startsAt, newStart: startsAt }
     })
-    await tx.reminder.deleteMany({ where: { appointmentId: id, kind: 'REMINDER', sentAt: null, claimedAt: null } })
+    await tx.reminder.deleteMany({ where: { appointmentId: id, kind: 'REMINDER', deliveryState: 'QUEUED', sentAt: null, claimedAt: null } })
     const appointment = { ...result, startsAt, endsAt }
     await scheduleReminder(tx, tenant, appointment)
     await enqueueStatus(tx, tenant, appointment, 'RESCHEDULED')

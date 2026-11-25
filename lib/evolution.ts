@@ -1,3 +1,4 @@
+import { DeliveryRejected } from './delivery'
 import { z } from 'zod'
 
 async function evolution(path: string, method: 'GET' | 'POST' | 'DELETE', body?: object) {
@@ -14,6 +15,9 @@ async function evolution(path: string, method: 'GET' | 'POST' | 'DELETE', body?:
     body: body ? JSON.stringify(body) : undefined,
     redirect: 'error', cache: 'no-store', signal: AbortSignal.timeout(12_000)
   })
+  if (!result.ok && path.startsWith('message/') && (result.status === 429 || [400, 401, 403, 404, 422].includes(result.status))) {
+    throw new DeliveryRejected(result.status === 429)
+  }
   if (!result.ok) throw new Error('Evolution rejected request (' + result.status + ')')
   return result
 }
@@ -45,7 +49,9 @@ export async function logoutWhatsApp(instance: string) {
 }
 
 export async function sendWhatsApp(instance: string, phone: string, text: string) {
-  await evolution('message/sendText/' + encodeURIComponent(instance), 'POST', { number: phone, text })
+  const response = await evolution('message/sendText/' + encodeURIComponent(instance), 'POST', { number: phone, text })
+  const data = z.object({ key: z.object({ id: z.string().max(256) }) }).safeParse(await response.json().catch(() => null))
+  return data.success ? data.data.key.id : undefined
 }
 
 export function reminderMessage(template: string | null, business: string, time: string) {

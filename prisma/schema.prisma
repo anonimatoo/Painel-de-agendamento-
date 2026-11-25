@@ -258,6 +258,10 @@ model Reminder {
   scheduledStart DateTime?
   sentAt DateTime?
   claimedAt DateTime?
+  deliveryState String @default("QUEUED")
+  deliveryAttempts Int @default(0)
+  retryAt DateTime?
+  providerMessageId String?
   @@unique([appointmentId, runAt])
   @@index([sentAt, runAt])
 }

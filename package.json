@@ -36,6 +36,7 @@
     "@types/react": "^19.0.0",
     "@typescript-eslint/parser": "^8.74.0",
     "eslint": "^9.39.5",
+    "playwright-core": "^1.65.1",
     "prisma": "^7.10.1",
     "tsx": "^4.20.0",
     "typescript": "^5.9.0"

@@ -32,3 +32,24 @@ test('vendas concorrentes respeitam o estoque e cancelamento devolve unidades um
     await db.tenant.deleteMany({ where: { id: { in: [tenant.id, other.id] } } })
   }
 })
+
+test('reservas de carrinho concorrem por estoque e expiração libera uma vez', async () => {
+  const { reserveOrder, cancelOrder } = await import('../lib/orders')
+  const tenant = await db.tenant.create({ data: { name: 'Loja', slug: randomUUID() } })
+  try {
+    const product = await db.product.create({ data: { tenantId: tenant.id, name: 'Kit', cents: 2500, stock: 3 } })
+    const request = { tenantId: tenant.id, name: 'Cliente', phone: '5511999999999', cart: [{ productId: product.id, quantity: 2 }] }
+    const results = await Promise.allSettled([reserveOrder({ ...request, requestId: randomUUID() }), reserveOrder({ ...request, requestId: randomUUID() })])
+    const paid = results.filter(result => result.status === 'fulfilled')
+    assert.equal(paid.length, 1)
+    const order = paid[0].value
+    assert.equal(order.cents, 5000)
+    assert.equal((await reserveOrder({ ...request, requestId: order.requestId })).id, order.id)
+    await Promise.all([db.$transaction(tx => cancelOrder(tx, tenant.id, order.id)), db.$transaction(tx => cancelOrder(tx, tenant.id, order.id))])
+    assert.equal((await db.product.findUniqueOrThrow({ where: { id: product.id } })).stock, 3)
+  } finally {
+    await db.shopOrder.deleteMany({ where: { tenantId: tenant.id } })
+    await db.product.deleteMany({ where: { tenantId: tenant.id } })
+    await db.tenant.delete({ where: { id: tenant.id } })
+  }
+})

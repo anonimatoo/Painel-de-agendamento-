@@ -68,6 +68,7 @@ model Tenant {
   customers Customer[]
   products Product[]
   financialEntries FinancialEntry[]
+  orders ShopOrder[]
   appointments Appointment[]
   subscriptions Subscription[]
   createdAt DateTime @default(now())
@@ -148,6 +149,7 @@ model Product {
   minimumStock Int @default(0)
   stock Int
   movements StockMovement[]
+  orderItems ShopOrderItem[]
   @@index([tenantId])
   @@unique([tenantId, id])
 }
@@ -366,4 +368,44 @@ model MediaAsset {
   bytes Int
   createdAt DateTime @default(now())
   @@unique([tenantId, kind, target])
+}
+
+enum OrderStatus {
+  PENDING
+  PAID
+  CANCELED
+  REFUNDED
+}
+
+model ShopOrder {
+  id String @id @default(cuid())
+  tenantId String
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+  requestId String
+  customerName String
+  phone String
+  cents Int
+  status OrderStatus @default(PENDING)
+  checkoutId String? @unique
+  paymentIntentId String? @unique
+  expiresAt DateTime
+  paidAt DateTime?
+  refundedAt DateTime?
+  createdAt DateTime @default(now())
+  items ShopOrderItem[]
+  @@unique([tenantId, requestId])
+  @@unique([tenantId, id])
+  @@index([status, expiresAt])
+}
+
+model ShopOrderItem {
+  tenantId String
+  orderId String
+  productId String
+  quantity Int
+  name String
+  unitCents Int
+  order ShopOrder @relation(fields: [tenantId, orderId], references: [tenantId, id], onDelete: Cascade)
+  product Product @relation(fields: [tenantId, productId], references: [tenantId, id])
+  @@id([orderId, productId])
 }

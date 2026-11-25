@@ -15,10 +15,11 @@ export default async function CommercePage({ searchParams }: { searchParams: Pro
   if (!member || !['ADMIN', 'MANAGER'].includes(member.role) || !member.tenant.active || member.tenant.suspended) redirect('/dashboard')
   const tenantId = member.tenantId
   const zone = member.tenant.timezone
-  const [products, history, { entries, rows }, query] = await Promise.all([
+  const [products, history, { entries, rows }, orders, query] = await Promise.all([
     db.product.findMany({ where: { tenantId }, orderBy: { name: 'asc' } }),
     db.stockMovement.findMany({ where: { tenantId }, orderBy: { createdAt: 'desc' }, take: 60, include: { product: true } }),
     cashReport(tenantId, zone),
+    db.shopOrder.findMany({ where: { tenantId }, take: 60, orderBy: { createdAt: 'desc' }, include: { items: true } }),
     searchParams
   ])
   const positive = rows.reduce((sum, row) => sum + Math.max(0, row.cents), 0)
@@ -69,6 +70,14 @@ export default async function CommercePage({ searchParams }: { searchParams: Pro
         </form>}
       </details>)}
     </article>
+    <article><h2>Pedidos para retirada</h2>{orders.length ? <ul>{orders.map(order => <li key={order.id}>
+      {date(order.createdAt)} · {order.customerName} · +{order.phone} · {brl(order.cents)} ·
+      {' '}{order.status === 'PAID' ? 'Pago' : order.status === 'PENDING' ? 'Aguardando pagamento' : order.status === 'REFUNDED' ? 'Estornado' : 'Cancelado'}
+      {member.role === 'ADMIN' && order.status === 'PAID' && <form action={commerce.bind(null, 'refund-order')}>
+        <input type="hidden" name="id" value={order.id} /><button className="outline">Estornar pedido e repor estoque</button>
+      </form>}
+      <ul>{order.items.map(item => <li key={item.productId}>{item.quantity} × {item.name}</li>)}</ul>
+    </li>)}</ul> : <p>Nenhum pedido online.</p>}</article>
     <article><h2>Histórico de estoque</h2>
       {history.length ? <ul>{history.map(item => <li key={item.id}>
         {date(item.createdAt)} · {item.product.name} · {item.quantity > 0 ? '+' : ''}{item.quantity} · {item.kind === 'SALE' ? 'Venda presencial' : item.kind === 'REVERSAL' ? 'Cancelamento de venda' : 'Ajuste'}

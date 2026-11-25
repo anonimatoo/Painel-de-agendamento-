@@ -1,4 +1,5 @@
 import { db } from './db'
+import { settleOrderRefund } from './orders'
 import { settleAppointment, stripe } from './stripe'
 import { AgendaError } from './agenda'
 import type Stripe from 'stripe'
@@ -64,4 +65,16 @@ export async function reconcileAppointments() {
       console.error('appointment-reconciliation', reservation.id)
     }
   }
+}
+
+export async function refundOrder(tenantId: string, orderId: string) {
+  const order = await db.shopOrder.findFirst({
+    where: { tenantId, id: orderId, status: 'PAID' }, include: { tenant: { select: { stripeAccountId: true } } }
+  })
+  const account = order?.tenant.stripeAccountId
+  if (!order?.paymentIntentId || !account) throw new AgendaError('O pedido ainda não pode ser estornado.')
+  const refund = await (await stripe()).refunds.create({ payment_intent: order.paymentIntentId, metadata: { orderId } },
+    { stripeAccount: account, idempotencyKey: 'order-refund:' + orderId })
+  if (refund.status === 'succeeded') await db.$transaction(tx => settleOrderRefund(tx, account, refund))
+  else if (refund.status !== 'pending' && refund.status !== 'requires_action') throw new AgendaError('O estorno não foi aprovado.')
 }

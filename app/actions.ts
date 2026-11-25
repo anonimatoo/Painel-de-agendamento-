@@ -12,7 +12,8 @@ import { AgendaError, blockSchedule, book, closeAppointment, dayBounds, localDat
 import { saveStripeConfiguration, stripeConfiguration, stripeClient } from '@/lib/stripe-settings'
 import { subscriptionCheckout } from '@/lib/billing'
 import { connectWhatsApp, logoutWhatsApp, sendWhatsApp, whatsAppStatus } from '@/lib/evolution'
-import { refundAppointment } from '@/lib/connect'
+import { reserveOrder } from '@/lib/orders'
+import { refundAppointment, refundOrder } from '@/lib/connect'
 import { stripe } from '@/lib/stripe'
 import { allowAttempt, consumeAccountToken, mailConfigured, sendAccountLink } from '@/lib/account-security'
 import { finishMfaSetup, startMfaSetup, verifyMfa } from '@/lib/mfa'
@@ -281,7 +282,7 @@ export async function brandSettings(operation: 'profile' | 'upload' | 'delete', 
   }, '/personalizacao')
 }
 
-export async function commerce(operation: 'product' | 'stock' | 'sale' | 'reverse' | 'entry' | 'settle', form: FormData) {
+export async function commerce(operation: 'product' | 'stock' | 'sale' | 'reverse' | 'entry' | 'settle' | 'refund-order', form: FormData) {
   await perform(async () => {
     const user = await userSession()
     if (!user) return '/login'
@@ -310,6 +311,9 @@ export async function commerce(operation: 'product' | 'stock' | 'sale' | 'revers
       await changeStock({ tenantId, ...values, sale: operation === 'sale' })
     } else if (operation === 'reverse') {
       await reverseSale(tenantId, id.parse(body.id))
+    } else if (operation === 'refund-order') {
+      if (member.role !== 'ADMIN') throw new AgendaError('Seu acesso não permite esta operação.')
+      await refundOrder(tenantId, id.parse(body.id))
     } else if (operation === 'entry') {
       const values = z.object({ title, kind: z.enum(['INCOME', 'EXPENSE']), cents: cents.min(1), dueAt: z.iso.date() }).parse(body)
       const date = DateTime.fromISO(values.dueAt, { zone: member.tenant.timezone })
@@ -452,5 +456,35 @@ export async function joinWaitlist(link: string, form: FormData) {
       update: {}, create: { tenantId, serviceId, professionalId, day, name, phone: number }
     })
     return path + '?espera=1'
+  }, path)
+}
+
+export async function shopCheckout(link: string, form: FormData) {
+  const path = '/estabelecimento/' + encodeURIComponent(link)
+  await perform(async () => {
+    const values = z.object({ name: title, phone, requestId: z.uuid() }).parse(Object.fromEntries(form))
+    const tenant = await db.tenant.findFirst({ where: { slug: link, active: true, suspended: false, stripeAccountId: { not: null } } })
+    if (!tenant?.stripeAccountId) throw new AgendaError('Compras online indisponíveis.')
+    const account = tenant.stripeAccountId
+    const api = await stripe()
+    if (!(await api.accounts.retrieve(account)).charges_enabled) throw new AgendaError('Compras online indisponíveis.')
+    if (!(await allowAttempt('shop-checkout', tenant.id + ':' + values.phone, 6, 1800))) throw new AgendaError('Aguarde antes de iniciar outro pedido.')
+    const count = z.coerce.number().int().min(0).max(100)
+    const cart = [...form.entries()].filter(([key]) => key.startsWith('product:')).map(([key, value]) => ({
+      productId: id.parse(key.slice('product:'.length)), quantity: count.parse(value)
+    })).filter(item => item.quantity)
+    if (!cart.length) throw new AgendaError('Selecione ao menos um produto.')
+    const order = await reserveOrder({ tenantId: tenant.id, cart, ...values })
+    if (order.status !== 'PENDING' || order.expiresAt <= new Date()) return path + '?pedido=' + order.id
+    const session = await api.checkout.sessions.create({
+      mode: 'payment', payment_method_types: ['card'], expires_at: +order.expiresAt / 1000,
+      line_items: order.items.map(item => ({
+        quantity: item.quantity, price_data: { currency: 'brl', unit_amount: item.unitCents, product_data: { name: item.name } }
+      })),
+      metadata: { orderId: order.id }, success_url: base() + path + '?pedido=' + order.id, cancel_url: base() + path
+    }, { stripeAccount: account, idempotencyKey: 'order:' + order.id })
+    await db.shopOrder.updateMany({ where: { id: order.id, status: 'PENDING' }, data: { checkoutId: session.id } })
+    if (!session.url || session.status !== 'open') return path + '?pedido=' + order.id
+    return session.url
   }, path)
 }

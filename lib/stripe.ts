@@ -2,6 +2,7 @@ import type { Prisma } from '@prisma/client'
 import type Stripe from 'stripe'
 import { stripeClient, stripeConfiguration } from './stripe-settings'
 import { db } from './db'
+import { settleOrder, settleOrderRefund } from './orders'
 import { scheduleReminder } from './agenda'
 
 export async function stripe() {
@@ -17,11 +18,14 @@ export async function applyEvent(event: Stripe.Event) {
 
     if (event.account && ['checkout.session.completed', 'checkout.session.async_payment_succeeded', 'checkout.session.expired', 'checkout.session.async_payment_failed'].includes(event.type)) {
       const session = event.data.object as Stripe.Checkout.Session
-      await settleAppointment(tx, event.account, session, event.type === 'checkout.session.expired' || event.type === 'checkout.session.async_payment_failed')
+      const expired = event.type === 'checkout.session.expired' || event.type === 'checkout.session.async_payment_failed'
+      await settleAppointment(tx, event.account, session, expired)
+      await settleOrder(tx, event.account, session, expired)
     }
 
     if (event.account && ['refund.created', 'refund.updated'].includes(event.type)) {
       const refund = event.data.object as Stripe.Refund
+      await settleOrderRefund(tx, event.account, refund)
       if (refund.status === 'succeeded' && refund.metadata?.appointmentId) {
         const paymentIntentId = typeof refund.payment_intent === 'string' ? refund.payment_intent : refund.payment_intent?.id
         const appointment = await tx.appointment.findFirst({

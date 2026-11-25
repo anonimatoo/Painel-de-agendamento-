@@ -1,16 +1,17 @@
+import { randomUUID } from 'node:crypto'
 import { notFound } from 'next/navigation'
 import { DateTime } from 'luxon'
 import { db } from '@/lib/db'
 import { AgendaError, availability } from '@/lib/agenda'
 import { SlotPicker } from './slot-picker'
-import { joinWaitlist, reserve } from '../../actions'
+import { joinWaitlist, reserve, shopCheckout } from '../../actions'
 import { Brand, ErrorNote, Field, brl } from '../../ui'
 
 export const dynamic = 'force-dynamic'
 
 export default async function Establishment({ params, searchParams }: {
   params: Promise<{ slug: string }>
-  searchParams: Promise<{ servico?: string; profissional?: string; dia?: string; erro?: string; reserva?: string; espera?: string }>
+  searchParams: Promise<{ servico?: string; profissional?: string; dia?: string; erro?: string; reserva?: string; espera?: string; pedido?: string }>
 }) {
   const { slug } = await params
   const query = await searchParams
@@ -33,6 +34,9 @@ export default async function Establishment({ params, searchParams }: {
   const confirmed = typeof query.reserva === 'string' && query.reserva.length < 100 && query.reserva !== 'pagamento'
     ? await db.appointment.count({ where: { id: query.reserva, tenantId: tenant.id, status: 'CONFIRMED' } })
     : 0
+  const order = typeof query.pedido === 'string' && query.pedido.length < 100
+    ? await db.shopOrder.findFirst({ where: { id: query.pedido, tenantId: tenant.id }, select: { status: true } }) : null
+  const purchasable = tenant.stripeAccountId && tenant.products.some(product => (product.promotionCents ?? product.cents) > 0)
   const today = DateTime.now().setZone(tenant.timezone).toISODate()!
   const day = query.dia ?? today
   const chosen = tenant.services.find(s => s.id === query.servico) ?? tenant.services[0]
@@ -60,6 +64,7 @@ export default async function Establishment({ params, searchParams }: {
         </nav>
       </section>
       <ErrorNote error={query.erro ?? dateError} />
+      {order && <p className="success" role="status">{order.status === 'PAID' ? 'Pagamento do pedido confirmado. Combine a retirada com o estabelecimento.' : order.status === 'PENDING' ? 'Aguardando confirmação do pagamento do pedido.' : 'Este pedido foi cancelado ou estornado.'}</p>}
       {query.espera && <p className="success" role="status">Solicitação de lista de espera enviada.</p>}
       {confirmed > 0 && <p className="success" role="status">Seu agendamento foi confirmado.</p>}
       {query.reserva === 'pagamento' && <p className="success" role="status">Seu agendamento será confirmado após a validação do pagamento.</p>}
@@ -93,7 +98,19 @@ export default async function Establishment({ params, searchParams }: {
       </article>}
       {gallery.length > 0 && <article><h2>Galeria</h2><div className="grid">{gallery.map(item => <img key={item.key} className="cover" src={'/api/imagens/' + item.key} alt={'Foto de ' + tenant.name} />)}</div></article>}
       {tenant.policies && <article><h2>Políticas de atendimento</h2><p className="preserve-lines">{tenant.policies}</p></article>}
-      {tenant.products.length > 0 && <article><h2>Produtos disponíveis</h2><ul>{tenant.products.map(p => <li key={p.id}>{image('PRODUCT', p.id) && <img className="catalog-photo" src={'/api/imagens/' + image('PRODUCT', p.id)} alt="" />}{p.name} · {brl(p.promotionCents ?? p.cents)}</li>)}</ul></article>}
+      {tenant.products.length > 0 && <article><h2>Produtos disponíveis</h2>
+        <ul>{tenant.products.map(product => <li key={product.id}>
+          {image('PRODUCT', product.id) && <img className="catalog-photo" src={'/api/imagens/' + image('PRODUCT', product.id)} alt="" />}
+          {product.name} · {brl(product.promotionCents ?? product.cents)}
+        </li>)}</ul>
+        {purchasable && <details><summary>Montar pedido para retirada</summary><form action={shopCheckout.bind(null, slug)}>
+          <input type="hidden" name="requestId" value={randomUUID()} />
+          {tenant.products.filter(product => (product.promotionCents ?? product.cents) > 0).map(product =>
+            <Field key={product.id} label={'Unidades de ' + product.name} name={'product:' + product.id} type="number" min={0} max={Math.min(product.stock, 100)} value={0} />
+          )}
+          <Field label="Nome" name="name" /><Field label="Telefone com DDI para retirada" name="phone" type="tel" /><button>Ir para pagamento</button>
+        </form></details>}
+      </article>}
     </main>
   </div>
 }

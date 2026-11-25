@@ -2,6 +2,7 @@ import { notFound } from 'next/navigation'
 import { DateTime } from 'luxon'
 import { db } from '@/lib/db'
 import { AgendaError, availability } from '@/lib/agenda'
+import { SlotPicker } from './slot-picker'
 import { reserve } from '../../actions'
 import { Brand, ErrorNote, Field, brl } from '../../ui'
 
@@ -47,20 +48,18 @@ export default async function Establishment({ params, searchParams }: {
       {confirmed > 0 && <p className="success" role="status">Seu agendamento foi confirmado.</p>}
       {query.reserva === 'pagamento' && <p className="success" role="status">Seu agendamento será confirmado após a validação do pagamento.</p>}
       <article><h2>Agendar atendimento</h2>
-        {chosen ? <form method="get" className="inline"><label>Serviço<select name="servico" defaultValue={chosen.id}>
-          {tenant.services.map(s => <option key={s.id} value={s.id}>{s.name} · {brl(s.cents)} · {s.duration} min</option>)}
-        </select></label>
-        <label>Profissional<select name="profissional" defaultValue={professional?.id ?? ''}><option value="">Escolha um profissional</option>
-          {chosen.assignments.map(a => <option value={a.professionalId} key={a.professionalId}>{a.professional.name}</option>)}
-        </select></label>
-        <label>Data<input type="date" name="dia" defaultValue={day} min={today} required /></label><button>Consultar horários</button></form> : <p>O estabelecimento ainda não abriu a agenda.</p>}
+        {chosen ? <SlotPicker chosenId={chosen.id} professionalId={professional?.id ?? ''} day={day} today={today}
+          services={tenant.services.map(s => ({
+            id: s.id, label: s.name + ' · ' + brl(s.cents) + ' · ' + s.duration + ' min',
+            professionals: s.assignments.map(a => ({ id: a.professionalId, name: a.professional.name }))
+          }))} /> : <p>O estabelecimento ainda não abriu a agenda.</p>}
         {professional && !slots.length && <p>Nenhum horário disponível nesta data.</p>}
         {!!slots.length && <form action={reserve.bind(null, slug)}>
           <input type="hidden" name="serviceId" value={chosen.id} /><input type="hidden" name="professionalId" value={professional!.id} />
           <label>Horário<select name="startsAt" required>{slots.map(s => <option key={s.start} value={s.start}>{s.label}</option>)}</select></label>
           <Field label="Nome" name="name" /><Field label="WhatsApp com DDI (ex. 5511999999999)" name="phone" type="tel" />
           <label className="check"><input type="checkbox" name="consent" /> Quero receber lembretes deste atendimento pelo WhatsApp.</label>
-          <button>{tenant.onlinePayment ? 'Continuar para pagamento' : 'Confirmar agendamento'}</button>
+          <button>{tenant.onlinePayment && chosen.cents > 0 ? 'Continuar para pagamento' : 'Confirmar agendamento'}</button>
         </form>}
       </article>
       {tenant.products.length > 0 && <article><h2>Produtos disponíveis</h2><ul>{tenant.products.map(p => <li key={p.id}>{p.name} · {brl(p.cents)}</li>)}</ul></article>}

@@ -34,13 +34,14 @@ export async function applyEvent(event: Stripe.Event) {
 
     if (!event.account && /^customer\.subscription\.(created|updated|deleted)$/.test(event.type)) {
       const incoming = event.data.object as Stripe.Subscription
-      const current = await stripe().subscriptions.retrieve(incoming.id)
-      const customer = typeof current.customer === 'string' ? current.customer : current.customer.id
+      const customer = typeof incoming.customer === 'string' ? incoming.customer : incoming.customer.id
       const tenant = await tx.tenant.findUnique({ where: { stripeCustomerId: customer } })
-      const price = current.items.data[0]?.price.id
-      if (!tenant || !price) return
+      if (!tenant) return
       // Serialize recomputation for concurrent subscriptions within the same tenant.
       await tx.$queryRaw`SELECT id FROM "Tenant" WHERE id = ${tenant.id} FOR UPDATE`
+      const current = await stripe().subscriptions.retrieve(incoming.id)
+      const price = current.items.data[0]?.price.id
+      if (!price) return
       const plan = await tx.plan.findFirst({ where: { OR: [{ monthlyPriceId: price }, { annualPriceId: price }] } })
       if (!plan) return
       await tx.subscription.upsert({

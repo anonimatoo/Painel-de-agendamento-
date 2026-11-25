@@ -49,3 +49,9 @@ test('PostgreSQL impede vínculos cruzados e agendamentos sobrepostos', async ()
     await db.tenant.deleteMany({ where: { id: { in: [first.id, second.id] } } })
   }
 })
+
+test('carregamento de capa rejeita conteúdo inválido antes de gravar', async () => {
+  const { uploadCover } = await import('../lib/storage')
+  const file = new File(['<svg>imagem inválida</svg>'], 'foto.png', { type: 'image/png' })
+  await assert.rejects(uploadCover('estabelecimento', file), /imagem JPG, PNG ou WebP válida/)
+})

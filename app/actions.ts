@@ -100,9 +100,13 @@ export async function manage(operation: string, form: FormData) {
           name: title, description: text, address: text, color: z.string().regex(/^#[\da-f]{6}$/i),
           reminderMinutes: z.coerce.number().int().min(0).max(10080)
         }).parse(body)
+        const onlinePayment = form.has('onlinePayment')
+        if (onlinePayment && (!tenant.stripeAccountId || !(await stripe().accounts.retrieve(tenant.stripeAccountId)).charges_enabled)) {
+          throw new AgendaError('Conclua a configuração da conta para aceitar pagamentos.')
+        }
         await db.tenant.update({ where: { id: tenantId }, data: {
           ...data, reminderMinutes: data.reminderMinutes || null,
-          onlinePayment: form.has('onlinePayment') && !!tenant.stripeAccountId
+          onlinePayment
         } })
         break
       }
@@ -164,7 +168,7 @@ export async function manage(operation: string, form: FormData) {
   }, '/dashboard')
 }
 
-export async function admin(operation: 'plan' | 'suspend', form: FormData) {
+export async function admin(operation: 'plan' | 'suspend' | 'whatsapp', form: FormData) {
   await perform(async () => {
     const user = await userSession()
     if (!user?.platformAdmin) return '/login'
@@ -178,6 +182,9 @@ export async function admin(operation: 'plan' | 'suspend', form: FormData) {
         api.prices.create({ product: product.id, unit_amount: data.annualCents, currency: 'brl', recurring: { interval: 'year' } })
       ])
       await db.plan.create({ data: { ...data, monthlyPriceId: monthly.id, annualPriceId: annual.id } })
+    } else if (operation === 'whatsapp') {
+      const data = z.object({ tenantId: id, instance: z.string().trim().regex(/^[\w-]{0,70}$/) }).parse(body)
+      await db.tenant.update({ where: { id: data.tenantId }, data: { whatsappInstance: data.instance || null } })
     } else {
       const data = z.object({ tenantId: id, suspended: z.enum(['true', 'false']) }).parse(body)
       await db.tenant.update({ where: { id: data.tenantId }, data: { suspended: data.suspended === 'true' } })
@@ -192,7 +199,9 @@ export async function reserve(link: string, form: FormData) {
     const data = z.object({ serviceId: id, professionalId: id, startsAt: z.string().datetime(), name: title, phone }).parse(Object.fromEntries(form))
     const tenant = await db.tenant.findFirst({ where: { slug: link, active: true, suspended: false } })
     if (!tenant) throw new AgendaError('Agendamento indisponível.')
-    const online = tenant.onlinePayment
+    const service = await db.service.findFirst({ where: { tenantId: tenant.id, id: data.serviceId, active: true } })
+    if (!service) throw new AgendaError('Serviço indisponível.')
+    const online = tenant.onlinePayment && service.cents > 0
     const account = tenant.stripeAccountId
     if (online && (!account || !(await stripe().accounts.retrieve(account)).charges_enabled)) throw new AgendaError('O pagamento está indisponível no momento.')
     const appointment = await book(tenant, { ...data, consent: form.has('consent'), online })

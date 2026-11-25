@@ -35,3 +35,12 @@ Execute os testes com um PostgreSQL exclusivo de desenvolvimento.
 node --env-file=.env --import tsx --test tests/agenda.test.ts
 npm run build
 ```
+
+Com a aplicação em execução e um banco de testes separado, rode as verificações HTTP.
+
+```powershell
+node --env-file=.env tests/smoke.mjs
+node --env-file=.env --import tsx tests/fluxo.ts
+```
+
+A versão atual cobre o fluxo central de agenda. Consulte a matriz de aceitação em [Validação](docs/validacao.md) para ver a cobertura, os limites e os itens pendentes.

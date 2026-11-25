@@ -12,3 +12,5 @@ Referências consultadas
 - [Prisma](https://www.prisma.io/docs/orm/reference/system-requirements)
 - [Stripe Connect](https://docs.stripe.com/connect/direct-charges)
 - [Webhooks Stripe](https://docs.stripe.com/webhooks)
+
+A versão local usa Next.js 16.4.6, React 19.3.1, Prisma 7.10.1 com adaptador PostgreSQL, Zod 4.6.7, Stripe JS 18.5.0, BullMQ 5.81.6 e Sharp 0.35.5. O lockfile registra as versões instaladas. O build foi executado com Node.js 24.

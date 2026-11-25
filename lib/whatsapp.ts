@@ -35,7 +35,7 @@ export async function removeWhatsApp(tenantId: string) {
       throw new AgendaError('Solicite ao suporte a remoção desta conexão de WhatsApp.')
     }
     await deleteWhatsAppInstance(tenant.whatsappInstance)
-    await tx.tenant.update({ where: { id: tenantId }, data: { whatsappInstance: null, reminderMinutes: null, statusMessages: false } })
+    await tx.tenant.update({ where: { id: tenantId }, data: { whatsappInstance: null, reminderMinutes: null, reminderPresets: [], statusMessages: false, completionMessages: false } })
     await tx.reminder.updateMany({
       where: { appointment: { tenantId }, deliveryState: 'QUEUED' }, data: { deliveryState: 'CANCELED' }
     })

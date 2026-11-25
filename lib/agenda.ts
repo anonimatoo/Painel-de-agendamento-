@@ -74,24 +74,41 @@ export async function book(tenant: Tenant, data: { serviceId: string; profession
     } })
     await tx.appointmentHistory.create({ data: { appointmentId: appointment.id, operation: 'CREATED', newStart: appointment.startsAt } })
     await scheduleReminder(tx, tenant, appointment)
-    if (!data.online) await enqueueStatus(tx, tenant, appointment, 'CONFIRMED')
+    await enqueueStatus(tx, tenant, appointment, data.online ? 'PAYMENT_PENDING' : 'CONFIRMED')
     return appointment
   })
 }
 
-export async function scheduleReminder(tx: Prisma.TransactionClient, tenant: Tenant, appointment: { id: string; startsAt: Date; consent: boolean; status: string }) {
-  if (!appointment.consent || appointment.status !== 'CONFIRMED' || !tenant.reminderMinutes) return
-  const runAt = new Date(+appointment.startsAt - tenant.reminderMinutes * 60_000)
-  if (runAt <= new Date()) return
-  await tx.reminder.upsert({
-    where: { appointmentId_runAt: { appointmentId: appointment.id, runAt } }, update: {},
-    create: { appointmentId: appointment.id, runAt }
-  })
+export function reminderOffsets(tenant: Pick<Tenant, 'reminderPresets' | 'reminderMinutes'>) {
+  return [...new Set([...tenant.reminderPresets, ...(tenant.reminderMinutes ? [tenant.reminderMinutes] : [])])]
 }
 
-export async function enqueueStatus(tx: Prisma.TransactionClient, tenant: Pick<Tenant, 'statusMessages'>, appointment: { id: string; startsAt: Date; consent: boolean }, kind: 'CONFIRMED' | 'PAID' | 'CANCELED' | 'RESCHEDULED') {
-  if (!tenant.statusMessages || !appointment.consent) return
-  await tx.reminder.create({ data: { appointmentId: appointment.id, runAt: new Date(), kind, scheduledStart: appointment.startsAt } })
+export async function scheduleReminder(tx: Prisma.TransactionClient, tenant: Tenant, appointment: { id: string; startsAt: Date; consent: boolean; status: string }) {
+  if (!appointment.consent || appointment.status !== 'CONFIRMED') return
+  const now = new Date()
+  for (const offset of reminderOffsets(tenant)) {
+    const runAt = new Date(+appointment.startsAt - offset * 60_000)
+    if (runAt <= now) continue
+    const values = { appointmentId: appointment.id, runAt, kind: 'REMINDER' }
+    await tx.reminder.upsert({
+      where: { appointmentId_runAt_kind: values }, update: {}, create: values
+    })
+    await tx.reminder.updateMany({
+      where: { ...values, deliveryState: 'CANCELED', deliveryAttempts: 0 }, data: { deliveryState: 'QUEUED' }
+    })
+  }
+}
+
+export async function enqueueStatus(
+  tx: Prisma.TransactionClient,
+  tenant: Pick<Tenant, 'statusMessages' | 'completionMessages' | 'reviewUrl'>,
+  appointment: { id: string; startsAt: Date; consent: boolean },
+  kind: 'CONFIRMED' | 'PAID' | 'CANCELED' | 'RESCHEDULED' | 'PAYMENT_PENDING' | 'COMPLETED' | 'FEEDBACK'
+) {
+  const completion = kind === 'COMPLETED' || kind === 'FEEDBACK'
+  if (!appointment.consent || (completion ? !tenant.completionMessages : !tenant.statusMessages) || (kind === 'FEEDBACK' && !tenant.reviewUrl)) return
+  const runAt = new Date(Date.now() + (kind === 'FEEDBACK' ? 2 * 60 * 60_000 : 0))
+  await tx.reminder.create({ data: { appointmentId: appointment.id, runAt, kind, scheduledStart: appointment.startsAt } })
 }
 
 async function lockProfessional(tx: Prisma.TransactionClient, tenantId: string, professionalId: string) {
@@ -156,9 +173,11 @@ export async function closeAppointment(tenantId: string, id: string, status: 'CO
     if (!updated.count) throw new AgendaError('Não foi possível atualizar esse atendimento.')
     await tx.appointmentHistory.create({ data: { appointmentId: id, actorId, operation: status } })
     if (status === 'COMPLETED') {
-      const appointment = await tx.appointment.findUniqueOrThrow({ where: { id }, include: { professional: true } })
+      const appointment = await tx.appointment.findUniqueOrThrow({ where: { id }, include: { professional: true, tenant: true } })
       const cents = calculateCommission(appointment.cents, appointment.professional.commissionBps, appointment.professional.commissionFixed)
       if (cents) await tx.professionalCommission.create({ data: { appointmentId: id, cents } })
+      await enqueueStatus(tx, appointment.tenant, appointment, 'COMPLETED')
+      await enqueueStatus(tx, appointment.tenant, appointment, 'FEEDBACK')
     }
     if (status === 'CANCELED') {
       const appointment = await tx.appointment.findUniqueOrThrow({ where: { id }, include: { tenant: true } })

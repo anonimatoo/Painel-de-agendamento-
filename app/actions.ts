@@ -557,13 +557,15 @@ export async function saveWhatsAppPreferences(form: FormData) {
     if (!member || member.role !== 'ADMIN' || !member.tenant.active || member.tenant.suspended) return '/dashboard'
     const values = z.object({
       reminderMinutes: z.coerce.number().int().min(0).max(10080),
-      reminderTemplate: z.string().trim().max(500)
+      reminderTemplate: z.string().trim().max(500),
+      reviewUrl: z.union([z.literal(''), z.url({ protocol: /^https$/ }).max(300)])
     }).parse(Object.fromEntries(form))
+    const reminderPresets = [...new Set(z.array(z.enum(['120', '1440', '2880'])).parse(form.getAll('presets')).map(Number))]
     const tenant = await db.tenant.update({
       where: { id: member.tenantId },
-      data: { reminderMinutes: values.reminderMinutes || null, reminderTemplate: values.reminderTemplate || null, statusMessages: form.has('statusMessages') }
+      data: { reminderMinutes: values.reminderMinutes || null, reminderTemplate: values.reminderTemplate || null, statusMessages: form.has('statusMessages'), reminderPresets, completionMessages: form.has('completionMessages'), reviewUrl: values.reviewUrl || null }
     })
-    if (!tenant.reminderMinutes) return '/whatsapp'
+    if (!tenant.reminderMinutes && !tenant.reminderPresets.length) return '/whatsapp'
     const appointments = await db.appointment.findMany({ where: {
       tenantId: tenant.id, status: 'CONFIRMED', consent: true, startsAt: { gt: new Date() }
     }, take: 1000 })

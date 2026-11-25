@@ -32,6 +32,11 @@ export default async function WhatsApp({ searchParams }: { searchParams: Promise
     <article><h2>Lembretes e avisos</h2><form action={saveWhatsAppPreferences}>
       <Field label="Antecedência do lembrete em minutos. Use 0 para desativar." name="reminderMinutes" type="number" min={0} max={10080} value={tenant.reminderMinutes ?? 0} />
       <label className="check"><input type="checkbox" name="statusMessages" defaultChecked={tenant.statusMessages} /> Enviar avisos de confirmação, pagamento, reagendamento e cancelamento</label>
+      {[['2880', '48 horas'], ['1440', '24 horas'], ['120', '2 horas']].map(([value, label]) => <label key={value} className="check">
+        <input type="checkbox" name="presets" value={value} defaultChecked={tenant.reminderPresets.includes(Number(value))} /> Lembrar {label} antes
+      </label>)}
+      <label className="check"><input type="checkbox" name="completionMessages" defaultChecked={tenant.completionMessages} /> Agradecer após o atendimento e solicitar avaliação se houver um link</label>
+      <Field label="Link para avaliação" name="reviewUrl" type="url" required={false} value={tenant.reviewUrl ?? ''} />
       <ReminderEditor initial={tenant.reminderTemplate ?? ''} /><button>Salvar preferências</button>
     </form></article>
     <article><h2>Histórico de envios</h2>

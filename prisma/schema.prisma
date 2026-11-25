@@ -66,6 +66,9 @@ model Tenant {
   whatsappInstance String? @unique
   reminderTemplate String?
   statusMessages Boolean @default(false)
+  reminderPresets Int[] @default([])
+  completionMessages Boolean @default(false)
+  reviewUrl String?
   reminderMinutes Int?
   members Member[]
   teamInvites TeamInvite[]
@@ -285,7 +288,7 @@ model Reminder {
   deliveryAttempts Int @default(0)
   retryAt DateTime?
   providerMessageId String?
-  @@unique([appointmentId, runAt])
+  @@unique([appointmentId, runAt, kind])
   @@index([sentAt, runAt])
 }
 

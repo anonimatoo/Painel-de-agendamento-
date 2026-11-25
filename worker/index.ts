@@ -1,5 +1,6 @@
 import { Queue, Worker } from 'bullmq'
 import { DateTime } from 'luxon'
+import { reminderOffsets } from '../lib/agenda'
 import { reconcileOrders } from '../lib/orders'
 import { reconcileBilling } from '../lib/billing-sync'
 import { stripe } from '../lib/stripe'
@@ -27,10 +28,17 @@ const worker = new Worker('agenda-reminders', async job => {
   const { tenant } = appointment
   if (!appointment.consent || !tenant.active || tenant.suspended || !tenant.whatsappInstance) return
   const reminderEligible = reminder.kind === 'REMINDER' && appointment.status === 'CONFIRMED' && appointment.startsAt > now &&
-    tenant.reminderMinutes && +reminder.runAt === +appointment.startsAt - tenant.reminderMinutes * 60_000
+    reminderOffsets(tenant).some(offset => +reminder.runAt === +appointment.startsAt - offset * 60_000)
   const sameStart = reminder.scheduledStart && +reminder.scheduledStart === +appointment.startsAt
-  const statusEligible = reminder.kind !== 'REMINDER' && tenant.statusMessages && sameStart &&
-    (reminder.kind === 'CANCELED' ? appointment.status === 'CANCELED' : appointment.status === 'CONFIRMED' && appointment.startsAt > now)
+  const completion = reminder.kind === 'COMPLETED' || reminder.kind === 'FEEDBACK'
+  const statusEligible = reminder.kind !== 'REMINDER' && sameStart && (
+    completion ? tenant.completionMessages && appointment.status === 'COMPLETED' && (reminder.kind !== 'FEEDBACK' || Boolean(tenant.reviewUrl))
+      : tenant.statusMessages && (
+        reminder.kind === 'CANCELED' ? appointment.status === 'CANCELED'
+          : reminder.kind === 'PAYMENT_PENDING' ? appointment.status === 'PENDING' && appointment.startsAt > now && Boolean(appointment.expiresAt && appointment.expiresAt > now)
+            : appointment.status === 'CONFIRMED' && appointment.startsAt > now
+      )
+  )
   if (!reminderEligible && !statusEligible) {
     await db.reminder.updateMany({ where: { id: reminder.id, deliveryState: 'QUEUED' }, data: { deliveryState: 'CANCELED' } })
     return
@@ -40,6 +48,10 @@ const worker = new Worker('agenda-reminders', async job => {
       CONFIRMED: 'atendimento confirmado para ' + time + '.',
       PAID: 'pagamento recebido. Atendimento confirmado para ' + time + '.',
       CANCELED: 'o atendimento de ' + time + ' foi cancelado.',
+      PAYMENT_PENDING: 'o pagamento do seu agendamento ainda está pendente.' +
+        (appointment.checkoutReturnUrl && appointment.paymentToken ? ' Acompanhe pelo link: ' + appointment.checkoutReturnUrl + '?pagamento=' + appointment.paymentToken : ''),
+      COMPLETED: 'agradecemos sua visita!',
+      FEEDBACK: 'como foi seu atendimento? Deixe sua avaliação em ' + tenant.reviewUrl,
       RESCHEDULED: 'o atendimento foi reagendado para ' + time + '.'
     }
     const message = reminder.kind === 'REMINDER' ? reminderMessage(tenant.reminderTemplate, tenant.name, time)
@@ -57,8 +69,9 @@ async function publishReminders() {
       sentAt: null, runAt: { gte: new Date(+now - 86_400_000), lte: now },
       appointment: { consent: true, tenant: { active: true, suspended: false, whatsappInstance: { not: null } } },
       OR: [
-        { kind: 'REMINDER', appointment: { startsAt: { gt: now }, status: 'CONFIRMED', tenant: { reminderMinutes: { not: null } } } },
-        { kind: { not: 'REMINDER' }, appointment: { tenant: { statusMessages: true } } }
+        { kind: 'REMINDER', appointment: { startsAt: { gt: now }, status: 'CONFIRMED' } },
+        { kind: { notIn: ['REMINDER', 'COMPLETED', 'FEEDBACK'] }, appointment: { tenant: { statusMessages: true } } },
+        { kind: { in: ['COMPLETED', 'FEEDBACK'] }, appointment: { tenant: { completionMessages: true } } }
       ]
     }
   })

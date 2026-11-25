@@ -1,6 +1,7 @@
 import { Queue, Worker } from 'bullmq'
 import { DateTime } from 'luxon'
 import { reconcileOrders } from '../lib/orders'
+import { reconcileBilling } from '../lib/billing-sync'
 import { stripe } from '../lib/stripe'
 import { reconcileAppointments } from '../lib/connect'
 import { deliverMessage, recoverDelivery } from '../lib/delivery'
@@ -67,16 +68,28 @@ async function publishReminders() {
   })))
 }
 let pending: Promise<void> | undefined
+async function checkBilling() {
+  if (await db.tenant.count({ where: { stripeCustomerId: { not: null } } })) await reconcileBilling(await stripe())
+}
+let billingPending: Promise<void> | undefined
+function tickBilling() {
+  if (!billingPending) billingPending = checkBilling()
+    .catch(() => console.error('billing-reconciliation-unavailable')).finally(() => { billingPending = undefined })
+}
 function tick() {
   if (!pending) pending = Promise.all([publishReminders(), reconcileAppointments(), db.shopOrder.count({ where: { status: 'PENDING', expiresAt: { lte: new Date() } } })
     .then(async count => { if (count) await reconcileOrders(await stripe()) })]).then(() => undefined).catch(() => console.error('Não foi possível consultar os lembretes.')).finally(() => { pending = undefined })
 }
 const timer = setInterval(tick, 15_000)
+const billingTimer = setInterval(tickBilling, 60_000)
+tickBilling()
 tick()
 worker.on('error', () => console.error('Falha na conexão do worker.'))
 worker.on('failed', job => console.error('Falha no envio do lembrete', job?.id))
 async function shutdown() {
   clearInterval(timer)
+  clearInterval(billingTimer)
+  await billingPending
   await pending
   await worker.close()
   await queue.close()

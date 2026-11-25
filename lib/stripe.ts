@@ -1,6 +1,7 @@
 import type { Prisma } from '@prisma/client'
 import type Stripe from 'stripe'
 import { stripeClient, stripeConfiguration } from './stripe-settings'
+import { refreshAccess, updateInvoice, updateSubscription } from './billing-sync'
 import { db } from './db'
 import { settleOrder, settleOrderRefund } from './orders'
 import { enqueueStatus, scheduleReminder } from './agenda'
@@ -9,10 +10,10 @@ export async function stripe() {
   return stripeClient((await stripeConfiguration()).secret)
 }
 
-export async function applyEvent(event: Stripe.Event) {
+export async function applyEvent(event: Stripe.Event, client?: Stripe) {
   await db.$transaction(async tx => {
     const inserted = await tx.webhookEvent.createMany({
-      data: { id: event.id, type: event.type }, skipDuplicates: true
+      data: { id: event.id, type: event.type, source: event.account ? 'connect' : 'billing' }, skipDuplicates: true
     })
     if (!inserted.count) return
 
@@ -37,24 +38,30 @@ export async function applyEvent(event: Stripe.Event) {
       }
     }
 
-    if (!event.account && /^customer\.subscription\.(created|updated|deleted)$/.test(event.type)) {
-      const incoming = event.data.object as Stripe.Subscription
-      const customer = typeof incoming.customer === 'string' ? incoming.customer : incoming.customer.id
-      const tenant = await tx.tenant.findUnique({ where: { stripeCustomerId: customer } })
-      if (!tenant) return
-      // Serialize recomputation for concurrent subscriptions within the same tenant.
-      await tx.$queryRaw`SELECT id FROM "Tenant" WHERE id = ${tenant.id} FOR UPDATE`
-      const current = await (await stripe()).subscriptions.retrieve(incoming.id)
-      const price = current.items.data[0]?.price.id
-      if (!price) return
-      const plan = await tx.plan.findFirst({ where: { OR: [{ monthlyPriceId: price }, { annualPriceId: price }] } })
-      if (!plan) return
-      await tx.subscription.upsert({
-        where: { id: current.id }, update: { status: current.status, planId: plan.id },
-        create: { id: current.id, status: current.status, planId: plan.id, tenantId: tenant.id }
-      })
-      const active = await tx.subscription.count({ where: { tenantId: tenant.id, status: { in: ['active', 'trialing'] } } })
-      await tx.tenant.update({ where: { id: tenant.id }, data: { active: active > 0 } })
+    if (event.account) return
+    const subscriptionEvent = /^customer\.subscription\.(created|updated|deleted|paused|resumed)$/.test(event.type)
+    const invoiceEvent = ['invoice.finalized', 'invoice.paid', 'invoice.payment_failed', 'invoice.payment_action_required',
+      'invoice.finalization_failed', 'invoice.voided', 'invoice.marked_uncollectible'].includes(event.type)
+    if (!subscriptionEvent && !invoiceEvent) return
+    const incoming = event.data.object as Stripe.Subscription | Stripe.Invoice
+    const customer = typeof incoming.customer === 'string' ? incoming.customer : incoming.customer?.id
+    if (!customer) return
+    const tenant = await tx.tenant.findUnique({ where: { stripeCustomerId: customer } })
+    if (!tenant) return
+    await tx.$queryRaw`SELECT id FROM "Tenant" WHERE id = ${tenant.id} FOR UPDATE`
+    const api = client ?? await stripe()
+    let subscriptionId = subscriptionEvent ? incoming.id : undefined
+    if (invoiceEvent && incoming.id) {
+      const invoice = await api.invoices.retrieve(incoming.id)
+      const invoiceCustomer = typeof invoice.customer === 'string' ? invoice.customer : invoice.customer?.id
+      if (invoiceCustomer !== customer) return
+      await updateInvoice(tx, tenant.id, invoice)
+      const subscription = invoice.parent?.subscription_details?.subscription
+      subscriptionId = typeof subscription === 'string' ? subscription : subscription?.id
+    }
+    if (subscriptionId) {
+      await updateSubscription(tx, tenant.id, await api.subscriptions.retrieve(subscriptionId))
+      await refreshAccess(tx, tenant.id)
     }
   }, { timeout: 20_000 })
 }

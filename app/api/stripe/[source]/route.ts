@@ -13,15 +13,16 @@ export async function POST(req: Request, context: { params: Promise<{ source: st
   }
   const secret = source === 'billing' ? settings.billingWebhook : settings.connectWebhook
   if (!secret) return new Response(null, { status: 503 })
+  const client = stripeClient(settings.secret)
   let event
   try {
-    event = stripeClient(settings.secret).webhooks.constructEvent(await req.text(), signature, secret)
+    event = client.webhooks.constructEvent(await req.text(), signature, secret)
     if (!!event.account !== (source === 'connect') || event.livemode !== (settings.mode === 'live')) return new Response(null, { status: 400 })
   } catch {
     return new Response(null, { status: 400 })
   }
   try {
-    await applyEvent(event)
+    await applyEvent(event, client)
     return Response.json({ received: true })
   } catch (error) {
     console.error('stripe-event', event.id, error instanceof Error ? error.name : 'unknown')

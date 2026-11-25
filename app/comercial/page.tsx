@@ -45,7 +45,7 @@ export default async function CommercePage({ searchParams }: { searchParams: Pro
         <form action={commerce.bind(null, 'settle')}><input type="hidden" name="id" value={entry.id} /><button className="outline">Dar baixa</button></form>
       </li>)}</ul> : <p>Nenhuma conta em aberto.</p>}
     </article>
-    <article><h2>Fluxo de caixa do mês</h2><a href="/api/financeiro/csv" className="button outline">Baixar CSV</a>
+    <article><h2>Fluxo de caixa do mês</h2><div className="inline"><a href="/api/financeiro/csv" className="button outline">Baixar CSV</a><a href="/api/financeiro/xlsx" className="button outline">Baixar XLSX</a></div>
       {rows.length ? <ul>{rows.map((row, index) => <li key={index}>{date(row.date)} · {row.title} · {brl(row.cents)}</li>)}</ul> : <p>Nenhuma movimentação liquidada neste mês.</p>}
     </article>
     <article><h2>Produtos e estoque</h2>

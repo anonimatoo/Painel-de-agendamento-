@@ -32,3 +32,17 @@ Permanecem pendentes o calendário completo com bloqueios, lista de espera e rea
 ## Homologação e produção
 
 Nenhuma integração externa foi validada em sandbox ou em produção. A homologação requer contas e credenciais de Stripe Billing e Connect, um bucket S3 e uma Evolution API compatível. Nenhuma aplicação foi implantada em produção. Os testes locais usaram PostgreSQL e Redis em contêineres descartáveis.
+
+## Branch finalizacao-comercial
+
+A matriz acima registra a situação do commit-base `dfa6d3b`. Consulte a [matriz detalhada desta branch](finalizacao.md) para o estado atualizado.
+
+- Treze migrations aplicadas em PostgreSQL 16 local, inclusive em um banco vazio.
+- TypeScript, lint, build de produção e dez testes automatizados executados. Os testes adicionais cobrem redefinição de senha, revogação de sessões, TOTP, limite de tentativas, concorrência de estoque, liberação de estoque, bloqueios e reagendamento.
+- Testes HTTP e fluxo de cadastro, autenticação, catálogo, agenda e reserva executados sobre o build de produção. Neste fluxo a ativação da assinatura continua sendo uma preparação local dos dados.
+- Seis telas verificadas no Chromium a 390 px e 1.280 px.
+- Redis local confirmou retentativa e deduplicação por identificador. SeaweedFS 4.55 confirmou upload, leitura WebP, isolamento, substituição e exclusão via S3.
+- Nenhuma cobrança Stripe, mensagem Evolution ou e-mail Resend foi homologado com credenciais de terceiros. Nenhum resultado de teste local representa homologação de produção.
+- Um evento local assinado com o SDK da Stripe foi entregue duas vezes ao endpoint e produziu um único registro. O evento verifica assinatura e deduplicação sem realizar uma transação externa.
+- No Chromium, um lançamento liquidado passou pelo formulário comercial. As exportações autenticadas retornaram o registro em CSV e um arquivo XLSX com tipo e assinatura esperados.
+- A auditoria de dependências ainda aponta o aviso GHSA-7589-6fvf-x4pw na cadeia do Prisma CLI. O aviso deve ser reavaliado antes do deploy.

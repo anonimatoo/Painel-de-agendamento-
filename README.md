@@ -44,3 +44,19 @@ node --env-file=.env --import tsx tests/fluxo.ts
 ```
 
 A versão atual cobre o fluxo central de agenda. Consulte a matriz de aceitação em [Validação](docs/validacao.md) para ver a cobertura, os limites e os itens pendentes.
+
+## Revisão da finalização comercial
+
+Leia a [matriz da branch](docs/finalizacao.md) e o [roteiro de homologação](docs/operacao.md#roteiro-de-homologação-externa). Configure CREDENTIAL_ENCRYPTION_KEY para a autenticação em duas etapas do Super Admin. Faça a primeira ativação pelo painel após criar a conta.
+
+Para as verificações adicionais com uma instância local em execução:
+
+```powershell
+npm run lint
+npx tsc --noEmit
+$env:CHROMIUM_PATH = 'C:\Program Files\Google\Chrome\Application\chrome.exe'
+node --env-file=.env --import tsx tests/responsivo.ts
+node --env-file=.env --import tsx tests/infra.ts
+```
+
+O teste de infraestrutura requer Redis, banco e bucket S3 dedicados para testes. O teste de webhook local usa um segredo de teste, com web e script apontando para a mesma instância e o mesmo banco.

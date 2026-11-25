@@ -5,14 +5,33 @@ import { userSession } from '@/lib/auth'
 import { admin, logout } from '../actions'
 import { Brand, ErrorNote, Field, brl } from '../ui'
 
-export default async function SuperAdmin({ searchParams }: { searchParams: Promise<{ erro?: string }> }) {
+export default async function SuperAdmin({ searchParams }: { searchParams: Promise<{ erro?: string; stripe?: string }> }) {
   if (!(await userSession())?.platformAdmin) redirect('/login')
-  const [tenants, plans] = await Promise.all([
+  const query = await searchParams
+  const [tenants, plans, stripeSettings] = await Promise.all([
     db.tenant.findMany({ orderBy: { createdAt: 'desc' }, take: 100, include: { subscriptions: { include: { plan: true } } } }),
-    db.plan.findMany({ orderBy: { monthlyCents: 'asc' } })
+    db.plan.findMany({ orderBy: { monthlyCents: 'asc' } }),
+    db.stripeSettings.findUnique({ where: { id: 1 }, select: { mode: true } })
   ])
   return <div className="shell"><aside><Brand /><nav><Link href="/super-admin">Administração</Link><a href="#assinantes">Assinantes</a><a href="#planos">Planos</a><Link href="/conta">Minha conta</Link></nav><form action={logout}><button className="subtle">Sair</button></form></aside>
-    <main className="content"><h1>Administração da plataforma</h1><ErrorNote error={(await searchParams).erro} />
+    <main className="content"><h1>Administração da plataforma</h1><ErrorNote error={query.erro} />
+      {query.stripe === 'conectada' && <p role="status" className="success">Conexão com a Stripe confirmada.</p>}
+      <article><h2>Configuração da Stripe</h2>
+        {stripeSettings && <p>Ambiente configurado · {stripeSettings.mode === 'live' ? 'Produção' : 'Teste'}</p>}
+        <details><summary>Atualizar credenciais</summary>
+          <form action={admin.bind(null, 'stripe-config')}>
+            <label>Ambiente<select name="mode" defaultValue={stripeSettings?.mode ?? 'test'}><option value="test">Teste</option><option value="live">Produção</option></select></label>
+            <Field label="Chave pública" name="publishableKey" />
+            <Field label="Chave secreta" name="secret" type="password" />
+            <Field label="Segredo de cobrança da assinatura" name="billingWebhook" type="password" />
+            <Field label="Segredo de pagamentos dos estabelecimentos" name="connectWebhook" type="password" />
+            <Field label="Sua senha" name="password" type="password" /><button>Salvar configuração</button>
+          </form>
+        </details>
+        <details><summary>Verificar conexão</summary><form action={admin.bind(null, 'stripe-test')}>
+          <Field label="Sua senha" name="password" type="password" /><button>Testar conexão</button>
+        </form></details>
+      </article>
       <article id="assinantes"><h2>Assinantes</h2>{!tenants.length ? <p>Nenhum estabelecimento cadastrado.</p> : <div className="scroll"><table>
         <thead><tr><th>Estabelecimento</th><th>Acesso</th><th>Assinaturas</th><th>Ação</th><th>WhatsApp</th></tr></thead>
         <tbody>{tenants.map(t => <tr key={t.id}><td>{t.name}</td><td>{t.suspended ? 'Suspenso' : t.active ? 'Ativo' : 'Inativo'}</td>

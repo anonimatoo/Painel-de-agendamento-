@@ -6,6 +6,7 @@ import { Prisma } from '@prisma/client'
 import { db } from '@/lib/db'
 import { endSession, hashPassword, membership, startSession, userSession, verifyPassword } from '@/lib/auth'
 import { AgendaError, book } from '@/lib/agenda'
+import { saveStripeConfiguration, stripeConfiguration, stripeClient } from '@/lib/stripe-settings'
 import { subscriptionCheckout } from '@/lib/billing'
 import { stripe } from '@/lib/stripe'
 import { allowAttempt, consumeAccountToken, mailConfigured, sendAccountLink } from '@/lib/account-security'
@@ -112,7 +113,7 @@ export async function manage(operation: string, form: FormData) {
       if (member.role !== 'ADMIN') throw new AgendaError('Seu acesso não permite esta operação.')
       if (operation === 'portal') {
         if (!tenant.stripeCustomerId) throw new AgendaError('Você ainda não possui uma assinatura.')
-        const portal = await stripe().billingPortal.sessions.create({ customer: tenant.stripeCustomerId, return_url: base() + '/assinatura' })
+        const portal = await (await stripe()).billingPortal.sessions.create({ customer: tenant.stripeCustomerId, return_url: base() + '/assinatura' })
         return portal.url
       }
       if (mailConfigured() && !user.emailVerifiedAt) throw new AgendaError('Confirme seu e-mail antes de contratar uma assinatura.')
@@ -129,7 +130,7 @@ export async function manage(operation: string, form: FormData) {
           reminderMinutes: z.coerce.number().int().min(0).max(10080)
         }).parse(body)
         const onlinePayment = form.has('onlinePayment')
-        if (onlinePayment && (!tenant.stripeAccountId || !(await stripe().accounts.retrieve(tenant.stripeAccountId)).charges_enabled)) {
+        if (onlinePayment && (!tenant.stripeAccountId || !(await (await stripe()).accounts.retrieve(tenant.stripeAccountId)).charges_enabled)) {
           throw new AgendaError('Conclua a configuração da conta para aceitar pagamentos.')
         }
         await db.tenant.update({ where: { id: tenantId }, data: {
@@ -178,7 +179,7 @@ export async function manage(operation: string, form: FormData) {
       }
       case 'connect': {
         if (member.role !== 'ADMIN') throw new AgendaError('Seu acesso não permite esta operação.')
-        const api = stripe()
+        const api = await stripe()
         const account = tenant.stripeAccountId ?? (await api.accounts.create({
           country: 'BR', type: 'express', email: user.email,
           capabilities: { card_payments: { requested: true }, transfers: { requested: true } }
@@ -196,14 +197,35 @@ export async function manage(operation: string, form: FormData) {
   }, '/dashboard')
 }
 
-export async function admin(operation: 'plan' | 'suspend' | 'whatsapp', form: FormData) {
+export async function admin(operation: 'plan' | 'suspend' | 'whatsapp' | 'stripe-config' | 'stripe-test', form: FormData) {
   await perform(async () => {
     const user = await userSession()
     if (!user?.platformAdmin) return '/login'
     const body = Object.fromEntries(form)
+    if (operation === 'stripe-config' || operation === 'stripe-test') {
+      const password = credentials.shape.password.parse(form.get('password'))
+      if (!(await allowAttempt('stripe-config', user.id, 6, 600)) || !(await verifyPassword(password, user.password))) {
+        throw new AgendaError('Não foi possível confirmar sua senha.')
+      }
+      if (operation === 'stripe-test') {
+        await stripeClient((await stripeConfiguration()).secret).accounts.retrieve()
+        return '/super-admin?stripe=conectada'
+      }
+      const data = z.object({
+        mode: z.enum(['test', 'live']),
+        publishableKey: z.string().regex(/^pk_(?:test|live)_[A-Za-z0-9]+$/).max(300),
+        secret: z.string().regex(/^sk_(?:test|live)_[A-Za-z0-9]+$/).max(300),
+        billingWebhook: z.string().regex(/^whsec_[A-Za-z0-9]+$/).max(300),
+        connectWebhook: z.string().regex(/^whsec_[A-Za-z0-9]+$/).max(300)
+      }).parse(body)
+      await saveStripeConfiguration(user.id, data.mode, data.publishableKey, {
+        secret: data.secret, billingWebhook: data.billingWebhook, connectWebhook: data.connectWebhook
+      })
+      return '/super-admin?stripe=conectada'
+    }
     if (operation === 'plan') {
       const data = z.object({ name: title, description: title, monthlyCents: cents.min(100), annualCents: cents.min(100), trialDays: z.coerce.number().int().min(0).max(90).default(0) }).parse(body)
-      const api = stripe()
+      const api = await stripe()
       const product = await api.products.create({ name: data.name, description: data.description })
       const [monthly, annual] = await Promise.all([
         api.prices.create({ product: product.id, unit_amount: data.monthlyCents, currency: 'brl', recurring: { interval: 'month' } }),
@@ -234,10 +256,10 @@ export async function reserve(link: string, form: FormData) {
     if (!service) throw new AgendaError('Serviço indisponível.')
     const online = tenant.onlinePayment && service.cents > 0
     const account = tenant.stripeAccountId
-    if (online && (!account || !(await stripe().accounts.retrieve(account)).charges_enabled)) throw new AgendaError('O pagamento está indisponível no momento.')
+    if (online && (!account || !(await (await stripe()).accounts.retrieve(account)).charges_enabled)) throw new AgendaError('O pagamento está indisponível no momento.')
     const appointment = await book(tenant, { ...data, consent: form.has('consent'), online })
     if (!online || !account) return path + '?reserva=' + appointment.id
-    const session = await stripe().checkout.sessions.create({
+    const session = await (await stripe()).checkout.sessions.create({
       mode: 'payment', payment_method_types: ['card'],
       line_items: [{ price_data: { currency: 'brl', unit_amount: appointment.cents, product_data: { name: 'Agendamento — ' + tenant.name } }, quantity: 1 }],
       metadata: { appointmentId: appointment.id },

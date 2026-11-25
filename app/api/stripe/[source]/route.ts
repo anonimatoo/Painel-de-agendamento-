@@ -1,15 +1,22 @@
-import { applyEvent, stripe } from '@/lib/stripe'
+import { applyEvent } from '@/lib/stripe'
+import { stripeClient, stripeConfiguration } from '@/lib/stripe-settings'
 
 export async function POST(req: Request, context: { params: Promise<{ source: string }> }) {
   const { source } = await context.params
-  const secret = source === 'billing' ? process.env.STRIPE_WEBHOOK_SECRET
-    : source === 'connect' ? process.env.STRIPE_CONNECT_WEBHOOK_SECRET : undefined
   const signature = req.headers.get('stripe-signature')
-  if (!secret || !signature) return new Response(null, { status: 400 })
+  if (!signature || !['billing', 'connect'].includes(source)) return new Response(null, { status: 400 })
+  let settings
+  try {
+    settings = await stripeConfiguration()
+  } catch {
+    return new Response(null, { status: 503 })
+  }
+  const secret = source === 'billing' ? settings.billingWebhook : settings.connectWebhook
+  if (!secret) return new Response(null, { status: 503 })
   let event
   try {
-    event = stripe().webhooks.constructEvent(await req.text(), signature, secret)
-    if (!!event.account !== (source === 'connect')) return new Response(null, { status: 400 })
+    event = stripeClient(settings.secret).webhooks.constructEvent(await req.text(), signature, secret)
+    if (!!event.account !== (source === 'connect') || event.livemode !== (settings.mode === 'live')) return new Response(null, { status: 400 })
   } catch {
     return new Response(null, { status: 400 })
   }

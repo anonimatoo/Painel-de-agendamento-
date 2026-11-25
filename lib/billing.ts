@@ -4,7 +4,7 @@ import { stripe } from './stripe'
 
 export async function subscriptionCheckout(input: { tenantId: string; email: string; planId: string; cycle: 'monthly' | 'annual'; origin: string }) {
   const { tenantId, email, planId, cycle, origin } = input
-  const api = stripe()
+  const api = await stripe()
   const route = await db.$transaction(async tx => {
     await tx.$queryRaw`SELECT id FROM "Tenant" WHERE id = ${tenantId} FOR UPDATE`
     const tenant = await tx.tenant.findUniqueOrThrow({ where: { id: tenantId }, include: { billingCheckout: true } })

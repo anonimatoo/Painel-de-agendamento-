@@ -1,10 +1,10 @@
-import Stripe from 'stripe'
+import type Stripe from 'stripe'
+import { stripeClient, stripeConfiguration } from './stripe-settings'
 import { db } from './db'
 import { scheduleReminder } from './agenda'
 
-export function stripe() {
-  if (!process.env.STRIPE_SECRET_KEY) throw new Error('Stripe configuration missing')
-  return new Stripe(process.env.STRIPE_SECRET_KEY, { maxNetworkRetries: 2 })
+export async function stripe() {
+  return stripeClient((await stripeConfiguration()).secret)
 }
 
 export async function applyEvent(event: Stripe.Event) {
@@ -39,7 +39,7 @@ export async function applyEvent(event: Stripe.Event) {
       if (!tenant) return
       // Serialize recomputation for concurrent subscriptions within the same tenant.
       await tx.$queryRaw`SELECT id FROM "Tenant" WHERE id = ${tenant.id} FOR UPDATE`
-      const current = await stripe().subscriptions.retrieve(incoming.id)
+      const current = await (await stripe()).subscriptions.retrieve(incoming.id)
       const price = current.items.data[0]?.price.id
       if (!price) return
       const plan = await tx.plan.findFirst({ where: { OR: [{ monthlyPriceId: price }, { annualPriceId: price }] } })

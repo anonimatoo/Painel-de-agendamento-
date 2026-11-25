@@ -20,7 +20,7 @@ export default async function BillingPage() {
   let unavailable = false
   if (customer) {
     try {
-      invoices = (await stripe().invoices.list({ customer, limit: 24 })).data
+      invoices = (await (await stripe()).invoices.list({ customer, limit: 24 })).data
     } catch {
       unavailable = true
     }

@@ -230,3 +230,12 @@ model BillingCheckout {
   trialDays Int
   expiresAt DateTime
 }
+
+model StripeSettings {
+  id Int @id
+  accountId String
+  publishableKey String
+  mode String
+  encrypted String
+  updatedAt DateTime @updatedAt
+}

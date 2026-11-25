@@ -19,7 +19,7 @@ export default async function SuperAdmin({ searchParams }: { searchParams: Promi
     db.webhookEvent.findFirst({ where: { source: 'connect' }, orderBy: { createdAt: 'desc' }, select: { createdAt: true } }),
     db.adminAudit.findMany({ where: { action: { startsWith: 'STRIPE_' } }, orderBy: { createdAt: 'desc' }, take: 15, select: { action: true, createdAt: true } })
   ])
-  return <div className="shell"><aside><Brand /><nav><Link href="/super-admin">Administração</Link><a href="#assinantes">Assinantes</a><a href="#planos">Planos</a><Link href="/conta">Minha conta</Link></nav><form action={logout}><button className="subtle">Sair</button></form></aside>
+  return <div className="shell"><aside><Brand /><nav><Link href="/super-admin">Administração</Link><a href="#assinantes">Assinantes</a><a href="#planos">Planos</a><Link href="/conciliacao">Movimentações Stripe</Link><Link href="/conta">Minha conta</Link></nav><form action={logout}><button className="subtle">Sair</button></form></aside>
     <main className="content"><h1>Administração da plataforma</h1><ErrorNote error={query.erro} />
       {query.stripe === 'conectada' && <p role="status" className="success">Conexão com a Stripe confirmada.</p>}
       <article><h2>Configuração da Stripe</h2>

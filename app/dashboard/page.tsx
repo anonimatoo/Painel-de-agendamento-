@@ -46,7 +46,7 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
       {enabled && manager && <Link href="/comercial"><Wallet /> Estoque e financeiro</Link>}
       {enabled && manager && <a href="#equipe"><UsersRound /> Equipe e catálogo</a>}
       {enabled && role === 'ADMIN' && <a href="#configuracoes"><Settings /> Configurações</a>}
-    {enabled && role === 'ADMIN' && <Link href="/equipe">Equipe e permissões</Link>}{enabled && role === 'ADMIN' && <Link href="/whatsapp">WhatsApp</Link>}<Link href="/conta">Minha conta</Link></nav><form action={logout}><button className="subtle">Sair</button></form></aside>
+    {role === 'ADMIN' && <Link href="/primeiro-acesso">Primeiro acesso</Link>}{enabled && role === 'ADMIN' && <Link href="/equipe">Equipe e permissões</Link>}{enabled && role === 'ADMIN' && <Link href="/whatsapp">WhatsApp</Link>}<Link href="/conta">Minha conta</Link></nav><form action={logout}><button className="subtle">Sair</button></form></aside>
     <main className="content">
       <div className="row"><div><p className="eyebrow">Estabelecimento</p><h1>{tenant.name}</h1></div>
         {enabled && <Link className="button outline" href={'/estabelecimento/' + tenant.slug}>Ver página pública</Link>}</div>

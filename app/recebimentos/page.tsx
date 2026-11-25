@@ -37,7 +37,7 @@ export default async function Receipts({ searchParams }: { searchParams: Promise
           <input name="id" type="hidden" value={item.id} /><button className="outline">Consultar pagamento na Stripe</button>
         </form>}
       </li>)}</ul> : <p>Nenhum pagamento registrado.</p>}
-      <Link href="/comercial">Consultar vendas e pedidos</Link>
+      <Link href="/comercial">Consultar vendas e pedidos</Link> · <Link href="/conciliacao">Ver movimentações da Stripe</Link>
     </article>
   </main></div>
 }

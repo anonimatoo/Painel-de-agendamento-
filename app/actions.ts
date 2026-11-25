@@ -638,3 +638,38 @@ export async function professionalCommission(form: FormData) {
     return '/comissoes'
   }, '/comissoes')
 }
+
+export async function sendInvoiceNotice(form: FormData) {
+  await perform(async () => {
+    const user = await userSession()
+    if (!user?.platformAdmin || !user.adminMfaVerified) return '/login'
+    if (!form.has('confirmed')) throw new AgendaError('Confirme que o envio foi autorizado.')
+    const invoiceId = id.parse(form.get('id'))
+    if (!await allowAttempt('invoice-notice', user.id, 30, 3600)) throw new AgendaError('Aguarde antes de enviar novas mensagens.')
+    const record = await db.billingInvoice.findUnique({
+      where: { id: invoiceId }, include: { tenant: { include: {
+        members: { where: { role: 'ADMIN', disabledAt: null, user: { emailVerifiedAt: { not: null } } },
+          take: 1, orderBy: { userId: 'asc' }, include: { user: { select: { email: true } } } }
+      } } }
+    })
+    const recipient = record?.tenant.members[0]?.user.email
+    if (!record || !recipient || !record.tenant.stripeCustomerId) throw new AgendaError('Nenhum responsável com e-mail confirmado está disponível.')
+    const invoice = await (await stripe()).invoices.retrieve(invoiceId)
+    const customer = typeof invoice.customer === 'string' ? invoice.customer : invoice.customer?.id
+    const link = invoice.hosted_invoice_url ? new URL(invoice.hosted_invoice_url) : null
+    if (record.tenant.stripeCustomerId !== customer || invoice.status !== 'open' || invoice.amount_remaining <= 0 ||
+      !link || link.protocol !== 'https:' || link.hostname !== 'invoice.stripe.com') {
+      throw new AgendaError('Esta fatura não tem uma cobrança em aberto disponível para regularização.')
+    }
+    const day = DateTime.now().setZone('America/Sao_Paulo').toISODate()
+    const key = 'invoice-notice/' + invoiceId + '/' + day
+    const { sendEmail } = await import('@/lib/mail')
+    await sendEmail({
+      to: recipient, subject: 'Fatura em aberto · CS Agenda Pro',
+      text: 'Olá,\n\nHá uma fatura em aberto da sua assinatura. Consulte o valor e as opções de pagamento pelo link oficial da Stripe:\n\n' + link +
+        '\n\nEquipe CS Agenda Pro', key
+    })
+    await db.adminAudit.create({ data: { actorId: user.id, targetId: invoiceId, action: 'INVOICE_NOTICE_SENT' } })
+    return '/comunicacao?enviado=1'
+  }, '/comunicacao')
+}

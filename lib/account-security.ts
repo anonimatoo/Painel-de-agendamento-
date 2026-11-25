@@ -1,5 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto'
 import type { TokenPurpose } from '@prisma/client'
+import { mailConfigured, sendEmail } from './mail'
+export { mailConfigured } from './mail'
 import { db } from './db'
 import { hashPassword } from './auth'
 
@@ -41,10 +43,6 @@ export async function consumeAccountToken(token: string, purpose: TokenPurpose, 
   })
 }
 
-export function mailConfigured() {
-  return Boolean(process.env.RESEND_API_KEY && process.env.MAIL_FROM)
-}
-
 export async function sendAccountLink(user: { id: string; email: string }, purpose: TokenPurpose) {
   if (!mailConfigured()) throw new Error('E-mail transacional indisponível')
   const token = await issueAccountToken(user.id, purpose)
@@ -52,12 +50,11 @@ export async function sendAccountLink(user: { id: string; email: string }, purpo
   url.searchParams.set('token', token)
   if (purpose === 'EMAIL_VERIFY') url.searchParams.set('verificar', '1')
   const title = purpose === 'PASSWORD_RESET' ? 'Redefina sua senha' : 'Confirme seu e-mail'
-  const result = await fetch('https://api.resend.com/emails', {
-    method: 'POST',
-    redirect: 'error',
-    signal: AbortSignal.timeout(10_000),
-    headers: { Authorization: 'Bearer ' + process.env.RESEND_API_KEY, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ from: process.env.MAIL_FROM, to: [user.email], subject: title + ' · CS Agenda Pro', text: title + ' no CS Agenda Pro pelo link: ' + url })
+  const introduction = purpose === 'PASSWORD_RESET'
+    ? 'Recebemos uma solicitação para redefinir sua senha. O link é válido por 30 minutos.'
+    : 'Confirme o endereço associado à sua conta. O link é válido por 24 horas.'
+  await sendEmail({
+    to: user.email, subject: title + ' · CS Agenda Pro',
+    text: 'Olá,\n\n' + introduction + '\n\n' + url + '\n\nSe você não solicitou esta operação, pode ignorar a mensagem.\n\nEquipe CS Agenda Pro'
   })
-  if (!result.ok) throw new Error('Falha no serviço de e-mail')
 }

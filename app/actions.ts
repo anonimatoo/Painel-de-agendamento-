@@ -11,6 +11,7 @@ import { endSession, hashPassword, membership, startSession, userSession, verify
 import { AgendaError, blockSchedule, book, closeAppointment, dayBounds, localDateTime, rescheduleAppointment } from '@/lib/agenda'
 import { checkStripeConnection, pauseStripePayments, saveStripeConfiguration, stripeForNewPayments } from '@/lib/stripe-settings'
 import { subscriptionCheckout } from '@/lib/billing'
+import { instanceName, provisionWhatsApp, removeWhatsApp } from '@/lib/whatsapp'
 import { connectWhatsApp, logoutWhatsApp, sendWhatsApp, whatsAppStatus } from '@/lib/evolution'
 import { reserveOrder } from '@/lib/orders'
 import { openAppointmentCheckout, reconcileAppointment, refundAppointment, refundOrder } from '@/lib/connect'
@@ -330,17 +331,24 @@ export async function whatsappControl(_previous: { message?: string; qr?: string
   try {
     const user = await userSession()
     const member = user ? await membership(user.id) : null
-    const instance = member?.tenant.whatsappInstance
-    if (!member || member.role !== 'ADMIN' || !member.tenant.active || member.tenant.suspended || !instance) {
+    let instance = member?.tenant.whatsappInstance
+    if (!member || member.role !== 'ADMIN' || !member.tenant.active || member.tenant.suspended) {
       return { message: 'A conexão do WhatsApp ainda não está disponível para esta conta.' }
     }
-    const operation = z.enum(['status', 'connect', 'logout', 'test']).parse(form.get('operation'))
+    const operation = z.enum(['status', 'connect', 'logout', 'test', 'remove']).parse(form.get('operation'))
     if (!(await allowAttempt('whatsapp-' + operation, member.tenantId, operation === 'test' ? 3 : 12, 300))) {
       return { message: 'Aguarde alguns minutos antes de tentar novamente.' }
     }
     if (operation === 'connect') {
+      instance = instance || await provisionWhatsApp(member.tenantId)
       const result = await connectWhatsApp(instance)
       return { qr: result.qr, message: result.connected ? 'WhatsApp conectado.' : result.qr ? 'Abra os dispositivos conectados do WhatsApp e escaneie o código.' : 'Aguardando o código. Tente novamente em instantes.' }
+    }
+    if (!instance) return { message: 'Conecte seu WhatsApp para continuar.' }
+    if (operation === 'remove') {
+      if (form.get('confirm') !== 'on') return { message: 'Confirme a exclusão antes de continuar.' }
+      await removeWhatsApp(member.tenantId)
+      return { message: 'Conexão excluída. Você pode cadastrar outra conta.' }
     }
     if (operation === 'logout') {
       await logoutWhatsApp(instance)
@@ -353,7 +361,7 @@ export async function whatsappControl(_previous: { message?: string; qr?: string
     const state = await whatsAppStatus(instance)
     return { message: state === 'open' ? 'WhatsApp conectado.' : state === 'connecting' ? 'Conexão em andamento.' : 'WhatsApp desconectado.' }
   } catch (error) {
-    return { message: error instanceof z.ZodError ? 'Confira os dados informados e tente novamente.' : 'Não foi possível concluir a operação no WhatsApp.' }
+    return { message: error instanceof AgendaError ? error.message : error instanceof z.ZodError ? 'Confira os dados informados e tente novamente.' : 'Não foi possível concluir a operação no WhatsApp.' }
   }
 }
 
@@ -399,6 +407,9 @@ export async function admin(operation: 'plan' | 'suspend' | 'whatsapp' | 'stripe
       await db.plan.create({ data: { ...data, monthlyPriceId: monthly.id, annualPriceId: annual.id } })
     } else if (operation === 'whatsapp') {
       const data = z.object({ tenantId: id, instance: z.string().trim().regex(/^[\w-]{0,70}$/) }).parse(body)
+      if (data.instance.startsWith('agenda-managed-') && data.instance !== instanceName(data.tenantId)) {
+        throw new AgendaError('Esta conexão pertence a outro estabelecimento.')
+      }
       await db.$transaction([
         db.tenant.update({ where: { id: data.tenantId }, data: { whatsappInstance: data.instance || null } }),
         db.adminAudit.create({ data: { actorId: user.id, action: 'WHATSAPP_LINK_UPDATED', targetId: data.tenantId } })
@@ -514,4 +525,27 @@ export async function reviewPayment(form: FormData) {
     await reconcileAppointment(reservation, account, await stripe())
     return '/recebimentos'
   }, '/recebimentos')
+}
+
+export async function saveWhatsAppPreferences(form: FormData) {
+  await perform(async () => {
+    const user = await userSession()
+    const member = user ? await membership(user.id) : null
+    if (!member || member.role !== 'ADMIN' || !member.tenant.active || member.tenant.suspended) return '/dashboard'
+    const values = z.object({
+      reminderMinutes: z.coerce.number().int().min(0).max(10080),
+      reminderTemplate: z.string().trim().max(500)
+    }).parse(Object.fromEntries(form))
+    const tenant = await db.tenant.update({
+      where: { id: member.tenantId },
+      data: { reminderMinutes: values.reminderMinutes || null, reminderTemplate: values.reminderTemplate || null, statusMessages: form.has('statusMessages') }
+    })
+    if (!tenant.reminderMinutes) return '/whatsapp'
+    const appointments = await db.appointment.findMany({ where: {
+      tenantId: tenant.id, status: 'CONFIRMED', consent: true, startsAt: { gt: new Date() }
+    }, take: 1000 })
+    const { scheduleReminder } = await import('@/lib/agenda')
+    for (const appointment of appointments) await scheduleReminder(db, tenant, appointment)
+    return '/whatsapp'
+  }, '/whatsapp')
 }

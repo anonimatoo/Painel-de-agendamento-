@@ -58,3 +58,11 @@ export function reminderMessage(template: string | null, business: string, time:
   const message = template || 'Olá! Seu atendimento em {estabelecimento} está marcado para {horario}.'
   return message.replace(/\{(?:estabelecimento|horario)\}/g, token => token === '{estabelecimento}' ? business : time)
 }
+
+export async function createWhatsAppInstance(instance: string) {
+  await evolution('instance/create', 'POST', { instanceName: instance, integration: 'WHATSAPP-BAILEYS', qrcode: false })
+}
+
+export async function deleteWhatsAppInstance(instance: string) {
+  await evolution(instancePath('delete', instance), 'DELETE')
+}

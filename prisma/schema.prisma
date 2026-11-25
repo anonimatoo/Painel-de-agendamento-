@@ -15,6 +15,7 @@ enum Status {
   CONFIRMED
   COMPLETED
   CANCELED
+  NO_SHOW
 }
 model User {
   id String @id @default(cuid())
@@ -83,6 +84,7 @@ model Service {
   active Boolean @default(true)
   assignments Assignment[]
   appointments Appointment[]
+  waitlist WaitEntry[]
   @@unique([tenantId, id])
 }
 model Professional {
@@ -93,6 +95,8 @@ model Professional {
   active Boolean @default(true)
   assignments Assignment[]
   hours WorkHours[]
+  blocks ScheduleBlock[]
+  waitlist WaitEntry[]
   appointments Appointment[]
   @@unique([tenantId, id])
 }
@@ -203,6 +207,7 @@ model Appointment {
   checkoutId String? @unique
   expiresAt DateTime?
   reminders Reminder[]
+  history AppointmentHistory[]
   createdAt DateTime @default(now())
   @@index([tenantId, startsAt])
 }
@@ -292,4 +297,43 @@ model StripeSettings {
   mode String
   encrypted String
   updatedAt DateTime @updatedAt
+}
+
+model ScheduleBlock {
+  id String @id @default(cuid())
+  tenantId String
+  professionalId String
+  professional Professional @relation(fields: [tenantId, professionalId], references: [tenantId, id])
+  startsAt DateTime @db.Timestamptz(3)
+  endsAt DateTime @db.Timestamptz(3)
+  reason String
+  @@index([tenantId, professionalId, startsAt])
+}
+
+model AppointmentHistory {
+  id String @id @default(cuid())
+  appointmentId String
+  appointment Appointment @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+  actorId String?
+  operation String
+  previousStart DateTime?
+  newStart DateTime?
+  createdAt DateTime @default(now())
+  @@index([appointmentId, createdAt])
+}
+
+model WaitEntry {
+  id String @id @default(cuid())
+  tenantId String
+  serviceId String
+  professionalId String
+  professional Professional @relation(fields: [tenantId, professionalId], references: [tenantId, id])
+  service Service @relation(fields: [tenantId, serviceId], references: [tenantId, id])
+  day String
+  name String
+  phone String
+  closedAt DateTime?
+  createdAt DateTime @default(now())
+  @@unique([tenantId, professionalId, serviceId, day, phone])
+  @@index([tenantId, day])
 }

@@ -23,6 +23,10 @@ const worker = new Worker('agenda-reminders', async job => {
   const { tenant } = appointment
   if (appointment.status !== 'CONFIRMED' || appointment.startsAt <= now || !appointment.consent ||
       !tenant.active || tenant.suspended || !tenant.whatsappInstance || !tenant.reminderMinutes) return
+  if (+reminder.runAt !== +appointment.startsAt - tenant.reminderMinutes * 60_000) {
+    await db.reminder.deleteMany({ where: { id: reminder.id, sentAt: null, claimedAt: null } })
+    return
+  }
   const claimed = await db.reminder.updateMany({
     where: { id: reminder.id, sentAt: null, OR: [{ claimedAt: null }, { claimedAt: { lt: new Date(+now - 60_000) } }] },
     data: { claimedAt: now }

@@ -55,3 +55,45 @@ test('carregamento de capa rejeita conteúdo inválido antes de gravar', async (
   const file = new File(['<svg>imagem inválida</svg>'], 'foto.png', { type: 'image/png' })
   await assert.rejects(uploadCover('estabelecimento', file), /imagem JPG, PNG ou WebP válida/)
 })
+
+test('bloqueios concorrem com reservas e reagendamento preserva histórico', async () => {
+  const { blockSchedule, rescheduleAppointment } = await import('../lib/agenda')
+  const tenant = await db.tenant.create({ data: { name: 'Agenda de teste', slug: randomUUID(), active: true } })
+  const day = DateTime.now().setZone(tenant.timezone).plus({ days: 3 }).startOf('day')
+  try {
+    const service = await db.service.create({ data: { tenantId: tenant.id, name: 'Corte', duration: 30, cents: 5000 } })
+    const professional = await db.professional.create({ data: {
+      tenantId: tenant.id, name: 'Ana', hours: { create: { weekday: day.weekday, startMinute: 540, endMinute: 720 } }
+    } })
+    const values = { tenantId: tenant.id, serviceId: service.id, professionalId: professional.id }
+    await db.assignment.create({ data: values })
+    const from = day.plus({ hours: 9 }).toJSDate()
+    const to = day.plus({ hours: 10 }).toJSDate()
+    const customer = { name: 'Cliente', phone: '5511999999999', consent: false, online: false }
+    const outcomes = await Promise.allSettled([
+      blockSchedule(tenant.id, professional.id, from, to, 'Folga'),
+      book(tenant, { ...values, ...customer, startsAt: from.toISOString() })
+    ])
+    assert.equal(outcomes.filter(result => result.status === 'fulfilled').length, 1)
+    if (outcomes[0].status === 'rejected') {
+      await db.appointment.deleteMany({ where: { tenantId: tenant.id } })
+      await blockSchedule(tenant.id, professional.id, from, to, 'Folga')
+    }
+    const slots = await availability(tenant, service.id, professional.id, day.toISODate()!)
+    assert.equal(slots[0].label, '10:00')
+    const appointment = await book(tenant, { ...values, ...customer, startsAt: slots[0].start })
+    await assert.rejects(rescheduleAppointment(tenant, appointment.id, from, 'tester'))
+    const moved = await rescheduleAppointment(tenant, appointment.id, new Date(slots[2].start), 'tester')
+    assert.equal(moved.startsAt.toISOString(), slots[2].start)
+    assert.equal(await db.appointmentHistory.count({ where: { appointmentId: appointment.id, operation: 'RESCHEDULED' } }), 1)
+  } finally {
+    await db.appointment.deleteMany({ where: { tenantId: tenant.id } })
+    await db.customer.deleteMany({ where: { tenantId: tenant.id } })
+    await db.scheduleBlock.deleteMany({ where: { tenantId: tenant.id } })
+    await db.assignment.deleteMany({ where: { tenantId: tenant.id } })
+    await db.workHours.deleteMany({ where: { tenantId: tenant.id } })
+    await db.professional.deleteMany({ where: { tenantId: tenant.id } })
+    await db.service.deleteMany({ where: { tenantId: tenant.id } })
+    await db.tenant.delete({ where: { id: tenant.id } })
+  }
+})

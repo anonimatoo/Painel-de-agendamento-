@@ -7,7 +7,7 @@ import { changeStock, reverseSale } from '@/lib/commerce'
 import { Prisma } from '@prisma/client'
 import { db } from '@/lib/db'
 import { endSession, hashPassword, membership, startSession, userSession, verifyPassword } from '@/lib/auth'
-import { AgendaError, book } from '@/lib/agenda'
+import { AgendaError, blockSchedule, book, closeAppointment, dayBounds, localDateTime, rescheduleAppointment } from '@/lib/agenda'
 import { saveStripeConfiguration, stripeConfiguration, stripeClient } from '@/lib/stripe-settings'
 import { subscriptionCheckout } from '@/lib/billing'
 import { connectWhatsApp, logoutWhatsApp, sendWhatsApp, whatsAppStatus } from '@/lib/evolution'
@@ -125,7 +125,7 @@ export async function manage(operation: string, form: FormData) {
     }
     if (!tenant.active || tenant.suspended) throw new AgendaError('Seu estabelecimento precisa de uma assinatura ativa.')
     const manager = member.role === 'ADMIN' || member.role === 'MANAGER'
-    if (!manager && !(member.role === 'RECEPTION' && ['customer','appointment'].includes(operation))) throw new AgendaError('Seu acesso não permite esta operação.')
+    if (!manager && !(member.role === 'RECEPTION' && ['customer', 'appointment', 'reschedule', 'wait-close'].includes(operation))) throw new AgendaError('Seu acesso não permite esta operação.')
     switch (operation) {
       case 'settings': {
         if (member.role !== 'ADMIN') throw new AgendaError('Seu acesso não permite esta operação.')
@@ -175,14 +175,26 @@ export async function manage(operation: string, form: FormData) {
         await db.product.create({ data: { tenantId, ...z.object({ name: title, cents, stock: z.coerce.number().int().min(0).max(1_000_000) }).parse(body) } })
         break
       case 'appointment': {
-        const data = z.object({ id, status: z.enum(['COMPLETED', 'CANCELED']) }).parse(body)
-        const result = await db.appointment.updateMany({
-          where: { id: data.id, tenantId, status: 'CONFIRMED', ...(data.status === 'CANCELED' ? { paidAt: null } : { startsAt: { lte: new Date() } }) },
-          data: { status: data.status }
-        })
-        if (!result.count) throw new AgendaError('Não foi possível atualizar esse atendimento.')
+        const data = z.object({ id, status: z.enum(['COMPLETED', 'CANCELED', 'NO_SHOW']) }).parse(body)
+        await closeAppointment(tenantId, data.id, data.status, user.id)
         break
       }
+      case 'reschedule': {
+        const data = z.object({ id, startsAt: z.string() }).parse(body)
+        await rescheduleAppointment(tenant, data.id, localDateTime(data.startsAt, tenant.timezone), user.id)
+        return '/agenda'
+      }
+      case 'block': {
+        const data = z.object({ professionalId: id, startsAt: z.string(), endsAt: z.string(), reason: title }).parse(body)
+        await blockSchedule(tenantId, data.professionalId, localDateTime(data.startsAt, tenant.timezone), localDateTime(data.endsAt, tenant.timezone), data.reason)
+        return '/agenda'
+      }
+      case 'unblock':
+        await db.scheduleBlock.deleteMany({ where: { id: id.parse(body.id), tenantId } })
+        return '/agenda'
+      case 'wait-close':
+        await db.waitEntry.updateMany({ where: { id: id.parse(body.id), tenantId, closedAt: null }, data: { closedAt: new Date() } })
+        return '/agenda'
       case 'refund': {
         if (member.role !== 'ADMIN') throw new AgendaError('Seu acesso não permite esta operação.')
         await refundAppointment(tenantId, id.parse(form.get('id')))
@@ -205,7 +217,7 @@ export async function manage(operation: string, form: FormData) {
         throw new AgendaError('Operação indisponível.')
     }
     return '/dashboard'
-  }, '/dashboard')
+  }, ['reschedule', 'block', 'unblock', 'wait-close'].includes(operation) ? '/agenda' : '/dashboard')
 }
 
 export async function commerce(operation: 'product' | 'stock' | 'sale' | 'reverse' | 'entry' | 'settle', form: FormData) {
@@ -355,5 +367,28 @@ export async function reserve(link: string, form: FormData) {
     await db.appointment.updateMany({ where: { id: appointment.id, status: 'PENDING' }, data: { checkoutId: session.id, expiresAt: new Date(session.expires_at * 1000) } })
     if (!session.url) throw new AgendaError('Não foi possível iniciar o pagamento.')
     return session.url
+  }, path)
+}
+
+export async function joinWaitlist(link: string, form: FormData) {
+  const values = Object.fromEntries(form)
+  const path = '/estabelecimento/' + encodeURIComponent(link)
+  await perform(async () => {
+    const { serviceId, professionalId, day, name, phone: number } = z.object({ serviceId: id, professionalId: id, day: z.iso.date(), name: title, phone }).parse(values)
+    const tenant = await db.tenant.findFirst({ where: { slug: link, active: true, suspended: false } })
+    if (!tenant) throw new AgendaError('Lista de espera indisponível.')
+    const { start } = dayBounds(day, tenant.timezone)
+    const today = DateTime.now().setZone(tenant.timezone).startOf('day')
+    if (start < today || start > today.plus({ days: 90 })) throw new AgendaError('Escolha uma data até 90 dias à frente.')
+    if (!(await allowAttempt('waitlist', tenant.id + ':' + number, 6, 3600))) throw new AgendaError('Aguarde antes de fazer outro pedido.')
+    const tenantId = tenant.id
+    if (!await db.assignment.findFirst({ where: { tenantId, serviceId, professionalId, service: { active: true }, professional: { active: true } } })) {
+      throw new AgendaError('Esse profissional não está disponível para o serviço escolhido.')
+    }
+    await db.waitEntry.upsert({
+      where: { tenantId_professionalId_serviceId_day_phone: { tenantId, professionalId, serviceId, day, phone: number } },
+      update: {}, create: { tenantId, serviceId, professionalId, day, name, phone: number }
+    })
+    return path + '?espera=1'
   }, path)
 }

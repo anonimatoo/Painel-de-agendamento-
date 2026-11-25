@@ -9,7 +9,7 @@ import { WhatsAppControls } from '../whatsapp-controls'
 import { logout, manage } from '../actions'
 import { Brand, ErrorNote, Field, brl } from '../ui'
 
-const labels = { CONFIRMED: 'Confirmado', PENDING: 'Aguardando pagamento', CANCELED: 'Cancelado', COMPLETED: 'Concluído' }
+const labels = { CONFIRMED: 'Confirmado', PENDING: 'Aguardando pagamento', CANCELED: 'Cancelado', NO_SHOW: 'Faltou', COMPLETED: 'Concluído' }
 const weekdays = ['Segunda-feira', 'Terça-feira', 'Quarta-feira', 'Quinta-feira', 'Sexta-feira', 'Sábado', 'Domingo']
 
 export default async function Dashboard({ searchParams }: { searchParams: Promise<{ erro?: string; assinatura?: string }> }) {
@@ -41,7 +41,7 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
   return <div className="shell">
     <aside><Brand /><nav>
       <Link href="/dashboard"><ClipboardList /> Visão geral</Link>
-      {enabled && desk && <a href="#agenda"><CalendarDays /> Agenda</a>}
+      {enabled && desk && <Link href="/agenda"><CalendarDays /> Agenda</Link>}
       {enabled && manager && <Link href="/comercial"><Wallet /> Estoque e financeiro</Link>}
       {enabled && manager && <a href="#equipe"><UsersRound /> Equipe e catálogo</a>}
       {enabled && role === 'ADMIN' && <a href="#configuracoes"><Settings /> Configurações</a>}
@@ -67,6 +67,7 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
           <tbody>{appointments.map(item => <tr key={item.id}><td>{DateTime.fromJSDate(item.startsAt, { zone: tenant.timezone }).toFormat('dd/LL/yyyy HH:mm')}</td><td>{item.customer.name}</td><td>{item.service.name}</td><td>{item.professional.name}</td><td>{labels[item.status]}</td><td>
             {item.status === 'CONFIRMED' && <form className="inline" action={manage.bind(null, 'appointment')}><input type="hidden" name="id" value={item.id} />
             {item.startsAt <= new Date() && <button className="outline" name="status" value="COMPLETED">Concluir</button>}
+            {item.startsAt <= new Date() && <button className="outline" name="status" value="NO_SHOW">Registrar falta</button>}
             {!item.paidAt && <button className="outline" name="status" value="CANCELED">Cancelar</button>}</form>}
             {role === 'ADMIN' && item.status === 'CONFIRMED' && item.paidAt && <form action={manage.bind(null, 'refund')}>
               <input type="hidden" name="id" value={item.id} /><button className="outline">Estornar e cancelar</button>

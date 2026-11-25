@@ -3,14 +3,14 @@ import { DateTime } from 'luxon'
 import { db } from '@/lib/db'
 import { AgendaError, availability } from '@/lib/agenda'
 import { SlotPicker } from './slot-picker'
-import { reserve } from '../../actions'
+import { joinWaitlist, reserve } from '../../actions'
 import { Brand, ErrorNote, Field, brl } from '../../ui'
 
 export const dynamic = 'force-dynamic'
 
 export default async function Establishment({ params, searchParams }: {
   params: Promise<{ slug: string }>
-  searchParams: Promise<{ servico?: string; profissional?: string; dia?: string; erro?: string; reserva?: string }>
+  searchParams: Promise<{ servico?: string; profissional?: string; dia?: string; erro?: string; reserva?: string; espera?: string }>
 }) {
   const { slug } = await params
   const query = await searchParams
@@ -45,6 +45,7 @@ export default async function Establishment({ params, searchParams }: {
     <header><Brand /></header><main className="content booking">
       <section className="public-title">{tenant.coverKey && <img className="cover" src={'/api/imagens/' + tenant.coverKey} alt="" />}<h1>{tenant.name}</h1><p>{tenant.description}</p>{tenant.address && <p>{tenant.address}</p>}</section>
       <ErrorNote error={query.erro ?? dateError} />
+      {query.espera && <p className="success" role="status">Solicitação de lista de espera enviada.</p>}
       {confirmed > 0 && <p className="success" role="status">Seu agendamento foi confirmado.</p>}
       {query.reserva === 'pagamento' && <p className="success" role="status">Seu agendamento será confirmado após a validação do pagamento.</p>}
       <article><h2>Agendar atendimento</h2>
@@ -53,7 +54,14 @@ export default async function Establishment({ params, searchParams }: {
             id: s.id, label: s.name + ' · ' + brl(s.cents) + ' · ' + s.duration + ' min',
             professionals: s.assignments.map(a => ({ id: a.professionalId, name: a.professional.name }))
           }))} /> : <p>O estabelecimento ainda não abriu a agenda.</p>}
-        {professional && !slots.length && <p>Nenhum horário disponível nesta data.</p>}
+        {professional && chosen && !slots.length && !dateError && <>
+          <p>Nenhum horário disponível nesta data.</p>
+          <details><summary>Entrar na lista de espera</summary><form action={joinWaitlist.bind(null, slug)}>
+            <input type="hidden" name="serviceId" value={chosen.id} /><input type="hidden" name="professionalId" value={professional.id} />
+            <input type="hidden" name="day" value={day} /><Field label="Nome" name="name" />
+            <Field label="Telefone com DDI para contato" name="phone" type="tel" /><button>Enviar solicitação</button>
+          </form></details>
+        </>}
         {!!slots.length && <form action={reserve.bind(null, slug)}>
           <input type="hidden" name="serviceId" value={chosen.id} /><input type="hidden" name="professionalId" value={professional!.id} />
           <label>Horário<select name="startsAt" required>{slots.map(s => <option key={s.start} value={s.start}>{s.label}</option>)}</select></label>

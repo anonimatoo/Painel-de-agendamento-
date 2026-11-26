@@ -84,3 +84,23 @@ Dimensione requests e duração de funções Vercel, armazenamento e horas de co
 - Antes de alterar a regra de comissão, confirme o valor comercial com o estabelecimento. Uma cobrança já preparada mantém o valor gravado na tentativa. A comissão profissional é apurada ao concluir o atendimento. Registrar pagamento é uma baixa manual.
 - Para homologar comissões e movimentações, compare as tarifas, comissões, estornos, contestações e repasses com o extrato oficial. A página de movimentações usa os valores do provedor na conta selecionada.
 - Em **Comunicação**, utilize apenas o aviso manual autorizado. Ele consulta uma fatura em aberto e envia seu link oficial ao administrador com e-mail confirmado. Nenhuma cobrança é criada pela ação.
+
+## Encerramento das pendências de desenvolvimento
+
+### Stripe e histórico financeiro
+
+A opção **Desativar novos recebimentos** na página do estabelecimento é uma pausa local e reversível. Ela mantém a conta Express associada, as conciliações, os pedidos existentes e os eventos Stripe. O painel conta reservas e pedidos em processamento ou em verificação. Antes de encerrar uma conta Express junto ao suporte, examine também o saldo, repasses, estornos e contestações no painel Stripe. A API de exclusão de conta tem condições próprias, incluindo saldo zerado em contas elegíveis de produção. Excluir uma conta poderia prejudicar o tratamento de obrigações posteriores. [Documentação Stripe](https://docs.stripe.com/api/accounts/delete)
+
+Na rotação dos segredos dos destinos, o painel mantém os segredos anteriores criptografados por até 24 horas, apenas para a mesma conta e modo. Coordene o período de sobreposição na Stripe, confirme os dois destinos e acompanhe os registros após a expiração. A edição não pode mudar de modo ou conta quando houver preços, vínculos financeiros ou livro Stripe existente.
+
+Em **Movimentações Stripe**, escolha a conta e o período e clique em **Atualizar movimentações**. O resultado importa o extrato da conta selecionada e registra versões das movimentações sem apagar as anteriores. Exporte CSV ou XLSX. O histórico separa conta e ambiente e usa valores reais em unidades mínimas da moeda. A divergência exibida compara o bruto da Stripe com o valor local de pagamentos vinculados. Repasses, contestações e saldo consultam diretamente o provedor. Trata-se de uma consulta financeira operacional.
+
+### Comunicação
+
+Em **Comunicação**, ative apenas os avisos autorizados, escolha o horário de Brasília, antecedência e texto. Use o teste restrito ao e-mail confirmado do Super Admin. O worker reconsulta a fatura antes do aviso de cobrança, descarta avisos obsoletos e marca entregas ambíguas para verificação. O link de contratação reaproveita o Checkout elegível. O aviso de cobrança usa o link da fatura Stripe existente. As boas-vindas só incluem Checkout se houver uma sessão válida.
+
+Em **WhatsApp**, os modelos podem ser editados por evento. Aniversário e retorno exigem autorização separada registrada no cadastro do cliente. Guarde apenas dia e mês do aniversário. O sistema cancela o lembrete de retorno quando há atendimento posterior. A configuração do provedor no diagnóstico aceita somente endereços exatos habilitados pela equipe técnica em EVOLUTION_ALLOWED_URLS ou EVOLUTION_URL. Web e worker usam as preferências salvas e a mesma chave de criptografia. Reserve o provisionamento por QR aos ambientes em que a modalidade estiver aprovada.
+
+### Diagnóstico sem transações reais
+
+O painel testa o banco, consulta a Stripe, lê o histórico dos webhooks, consulta instâncias da Evolution e verifica o bucket S3. Redis e worker usam um sinal recente gravado após a consulta real à fila. O teste do Resend consulta domínios. Uma chave com permissão apenas de envio exigirá homologação pelo envio de teste autorizado. As verificações de disponibilidade não certificam a entrega de mensagens ou o fluxo completo de pagamento.

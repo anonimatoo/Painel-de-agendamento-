@@ -58,3 +58,17 @@ A matriz acima registra a situação do commit-base `dfa6d3b`. A matriz detalhad
 - Stripe, Evolution e Resend sem homologação externa. A simulação de transporte e assinatura local não usa credenciais nem transações de sandbox. Nenhum deploy ou cobrança em produção foi realizado.
 
 Consulte a [matriz atual por requisito](finalizacao.md) e o [roteiro de homologação](operacao.md#roteiro-de-homologação-externa).
+
+## Encerramento posterior a b90d4af
+
+| Verificação | Resultado local |
+| --- | --- |
+| Instalação limpa | `npm ci` instalou as dependências do lockfile. |
+| TypeScript, lint e produção | Build, `tsc --noEmit` e lint aprovados após a instalação. |
+| Migrations | Oito novas migrations aplicadas ao banco existente. Todas as 29 migrations aplicadas a um PostgreSQL 16 vazio. |
+| Suítes automatizadas | 20 testes passaram, incluindo concorrência de assinaturas e agendamentos, rotação de segredos, eventos fora de ordem, pausa Connect isolada, estoque, livro Stripe, revogação e permissões. |
+| HTTP e ponta a ponta | Dez requisições, fluxo de cadastro, sessão e reserva, e deduplicação de evento assinado local passaram. |
+| Interface | Doze telas passaram a 390 px e 1.280 px no Chromium. Lançamento e exportações CSV e XLSX do caixa aprovados. Conta de consulta bloqueada no financeiro e nos endpoints de exportação. |
+| Infraestrutura | Retentativa e deduplicação Redis/BullMQ, heartbeat do worker e upload, leitura, substituição, exclusão e isolamento em S3 compatível local confirmados. |
+
+O teste de agenda registrou um aviso de depreciação do driver pg no adaptador Prisma, sem falha de execução. As simulações de transporte Stripe verificam a lógica local, sem efetuar transações nem provar comportamento comercial em sandbox. A entrega real por Stripe, Evolution e Resend, o processamento de estornos e tarifas via provedor, a infraestrutura gerenciada e o deploy de produção permanecem sem validação externa.

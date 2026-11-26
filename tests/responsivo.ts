@@ -13,6 +13,7 @@ async function main() {
     email, password: await hashPassword(password),
     memberships: { create: { role: 'ADMIN', tenant: { create: { name: 'Estúdio de teste visual', slug, active: true } } } }
   } })
+  const staffEmail = 'consulta-' + email
   let browser
   try {
     browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH, headless: true })
@@ -58,12 +59,31 @@ async function main() {
     assert.equal(xlsx.status(), 200)
     assert.match(xlsx.headers()['content-type'], /spreadsheetml/)
     assert.equal((await xlsx.body()).subarray(0, 2).toString(), 'PK')
+    const tenant = await db.tenant.findUniqueOrThrow({ where: { slug } })
+    await db.user.create({ data: {
+      email: staffEmail, password: await hashPassword(password),
+      memberships: { create: { tenantId: tenant.id, role: 'READONLY', permissionsCustomized: true, permissions: ['agenda.read'] } }
+    } })
+    const staff = await browser.newPage({ viewport: { width: 390, height: 844 } })
+    await staff.goto(origin + '/login')
+    await staff.getByLabel('E-mail').fill(staffEmail)
+    await staff.getByLabel('Senha', { exact: true }).fill(password)
+    await Promise.all([staff.waitForURL('**/dashboard'), staff.getByRole('button', { name: 'Entrar', exact: true }).click()])
+    await staff.goto(origin + '/agenda')
+    assert.equal(await staff.getByRole('heading', { name: 'Agenda', exact: true }).count(), 1)
+    assert.equal(await staff.getByRole('heading', { name: 'Novo agendamento presencial' }).count(), 0)
+    assert.equal((await staff.request.get(origin + '/api/financeiro/csv')).status(), 403)
+    assert.equal((await staff.request.get(origin + '/api/movimentacoes/xlsx')).status(), 403)
+    await staff.goto(origin + '/comercial')
+    assert.equal(new URL(staff.url()).pathname, '/dashboard')
+    await staff.close()
+    console.log('Conta de consulta sem permissão financeira bloqueada nos painéis e nas exportações.')
     console.log('Registro financeiro e exportações autenticadas em CSV e XLSX verificados.')
     console.log('Doze telas verificadas no Chromium em 390 px e 1280 px.')
   } finally {
     await browser?.close()
     await db.financialEntry.deleteMany({ where: { tenant: { slug } } })
-    await db.user.delete({ where: { id: user.id } })
+    await db.user.deleteMany({ where: { OR: [{ id: user.id }, { email: staffEmail }] } })
     await db.tenant.delete({ where: { slug } })
     await db.$disconnect()
   }

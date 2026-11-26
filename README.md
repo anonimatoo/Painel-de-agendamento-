@@ -64,3 +64,7 @@ O teste de infraestrutura requer Redis, banco e bucket S3 dedicados para testes.
 ### Revisão do PR #1
 
 Consulte a [matriz atual](docs/finalizacao.md), a [evidência de testes](docs/validacao.md) e os [procedimentos de operação e homologação](docs/operacao.md). A configuração Stripe salva no painel prevalece sobre o ambiente técnico. O provisionamento automático por QR na Evolution é opcional e usa EVOLUTION_QR_PROVISIONING.
+
+### Verificação da revisão de encerramento
+
+Crie um banco PostgreSQL dedicado, sem configuração Stripe salva. Execute `npm ci`, aplique as migrations e rode `npm run build`, `npx tsc --noEmit`, `npm run lint` e `npm test`. As suítes exercitam alterações de credenciais e dados descartáveis. Para testes de integração externa, utilize contas, domínios e segredos exclusivos de homologação. Consulte o [diagnóstico e a operação](docs/operacao.md#encerramento-das-pendências-de-desenvolvimento).

@@ -23,13 +23,14 @@ export async function availability(tenant: Tenant, serviceId: string, profession
   })
   if (!assignment) return []
   const overlap = { startsAt: { lt: end.toJSDate() }, endsAt: { gt: start.toJSDate() } }
-  const [busy, blocks] = await Promise.all([client.appointment.findMany({
+  const busy = await client.appointment.findMany({
     where: { tenantId: tenant.id, professionalId, status: { not: 'CANCELED' }, id: excludeAppointment ? { not: excludeAppointment } : undefined, ...overlap },
     select: { startsAt: true, endsAt: true }
-  }), client.scheduleBlock.findMany({
+  })
+  const blocks = await client.scheduleBlock.findMany({
     where: { tenantId: tenant.id, professionalId, ...overlap },
     select: { startsAt: true, endsAt: true }
-  })])
+  })
   const occupied = [...busy, ...blocks]
   const slots = new Map<string, { start: string; end: string; label: string }>()
   for (const hours of assignment.professional.hours) {

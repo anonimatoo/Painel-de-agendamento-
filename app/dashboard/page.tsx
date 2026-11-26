@@ -40,14 +40,14 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
     enabled && can(member, 'finance.read') ? db.appointment.findMany({ where: { tenantId, refundedAt: null, paidAt: { gte: month.toJSDate(), lt: month.plus({ months: 1 }).toJSDate() } }, select: { cents: true, chargeCents: true } }) : [],
     enabled && role === 'ADMIN' && tenant.stripeAccountId ? connectStatus(tenant.stripeAccountId).catch(() => null) : null
   ])
-  return <div className="shell">
+  return <div className={tenant.theme === 'dark' ? 'shell dark-workspace' : 'shell'}>
     <aside><Brand /><nav>
       <Link href="/dashboard"><ClipboardList /> Visão geral</Link>
       {enabled && desk && <Link href="/agenda"><CalendarDays /> Agenda</Link>}
       {enabled && (can(member, 'finance.read') || can(member, 'stock.manage') || can(member, 'sale.create') || can(member, 'product.manage')) && <Link href="/comercial"><Wallet /> Estoque e financeiro</Link>}
       {enabled && manager && <a href="#equipe"><UsersRound /> Equipe e catálogo</a>}
-      {enabled && role === 'ADMIN' && <a href="#configuracoes"><Settings /> Configurações</a>}
-    {role === 'ADMIN' && <Link href="/primeiro-acesso">Primeiro acesso</Link>}{enabled && role === 'ADMIN' && <Link href="/equipe">Equipe e permissões</Link>}{enabled && can(member, 'whatsapp.manage') && <Link href="/whatsapp">WhatsApp</Link>}<Link href="/conta">Minha conta</Link></nav><form action={logout}><button className="subtle">Sair</button></form></aside>
+      {enabled && can(member, 'settings.manage') && <a href="#configuracoes"><Settings /> Configurações</a>}
+    {enabled && can(member, 'brand.manage') && role !== 'ADMIN' && <Link href="/personalizacao">Personalizar página</Link>}{role === 'ADMIN' && <Link href="/primeiro-acesso">Primeiro acesso</Link>}{enabled && role === 'ADMIN' && <Link href="/equipe">Equipe e permissões</Link>}{enabled && can(member, 'whatsapp.manage') && <Link href="/whatsapp">WhatsApp</Link>}<Link href="/conta">Minha conta</Link></nav><form action={logout}><button className="subtle">Sair</button></form></aside>
     <main className="content">
       <div className="row"><div><p className="eyebrow">Estabelecimento</p><h1>{tenant.name}</h1></div>
         {enabled && <Link className="button outline" href={'/estabelecimento/' + tenant.slug}>Ver página pública</Link>}</div>
@@ -116,6 +116,13 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
           <Field label="Estoque inicial" name="stock" type="number" min={0} /><button>Adicionar produto</button>
         </form>{products.length > 0 && <ul>{products.map(p => <li key={p.id}>{p.name} · {brl(p.cents)} · {p.stock} em estoque</li>)}</ul>}</article>
       </section>}
+      {enabled && role !== 'ADMIN' && can(member, 'settings.manage') && <article id="configuracoes"><h2>Configurações gerais</h2>
+        <form action={manage.bind(null, 'settings')}>
+          <Field label="Nome" name="name" value={tenant.name} /><Field label="Descrição" name="description" value={tenant.description} required={false} />
+          <Field label="Endereço" name="address" value={tenant.address} required={false} /><Field label="Cor da página" name="color" type="color" value={tenant.color} />
+          <button>Salvar configurações gerais</button>
+        </form>
+      </article>}
       {enabled && role === 'ADMIN' && <article id="configuracoes"><h2>Configurações</h2><Link href="/recebimentos">Receber pagamentos</Link><Link href="/personalizacao">Personalizar página pública</Link>
         <form action={manage.bind(null, 'settings')}>
           <Field label="Nome" name="name" value={tenant.name} /><Field label="Descrição" name="description" value={tenant.description} required={false} />

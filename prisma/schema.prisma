@@ -43,6 +43,7 @@ model Session {
 model Tenant {
   id String @id @default(cuid())
   slug String @unique
+  aliases TenantAlias[]
   name String
   description String @default("")
   address String @default("")
@@ -409,6 +410,7 @@ enum MediaKind {
   SERVICE
   PRODUCT
   GALLERY
+  PROFILE
 }
 
 model MediaAsset {
@@ -567,4 +569,12 @@ model StripeMovement {
   recordedAt DateTime @default(now())
   @@index([scope, stripeId, recordedAt])
   @@index([scope, occurredAt])
+}
+
+model TenantAlias {
+  slug String @id
+  tenantId String
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  @@index([tenantId])
 }

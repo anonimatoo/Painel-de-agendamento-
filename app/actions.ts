@@ -6,6 +6,7 @@ import { randomUUID } from 'node:crypto'
 import { commercialKinds, commercialLabels, type CommercialKind } from '@/lib/commercial-rules'
 import { enqueueCommercial } from '@/lib/commercial-notices'
 import { can, permissionKeys, type Permission } from '@/lib/permissions'
+import { changePublicAddress, lockPublicAddress } from '@/lib/public-identity'
 import { DateTime } from 'luxon'
 import { changeStock, reverseSale } from '@/lib/commerce'
 import { Prisma } from '@prisma/client'
@@ -72,6 +73,8 @@ export async function account(action: 'login' | 'register', form: FormData) {
     const { business, link } = z.object({ business: title, link: slug }).parse(Object.fromEntries(form))
     const password = await hashPassword(data.password)
     const user = await db.$transaction(async tx => {
+      await lockPublicAddress(tx, link)
+      if (await tx.tenantAlias.findUnique({ where: { slug: link } })) throw new AgendaError('Este endereço público já está em uso.')
       const created = await tx.user.create({ data: {
         email: data.email, password,
         memberships: { create: { role: 'ADMIN', tenant: { create: { name: business, slug: link } } } }
@@ -170,7 +173,7 @@ export async function manage(operation: string, form: FormData) {
     }
     if (!tenant.active || tenant.suspended) throw new AgendaError('Seu estabelecimento precisa de uma assinatura ativa.')
     const scopes: Record<string, Permission> = {
-      cover: 'brand.manage', service: 'service.manage', professional: 'team.professionals',
+      settings: 'settings.manage', booking: 'agenda.create', cover: 'brand.manage', service: 'service.manage', professional: 'team.professionals',
       assignment: 'team.professionals', hours: 'team.professionals', customer: 'customer.create',
       product: 'product.manage', reschedule: 'agenda.edit', block: 'agenda.edit', unblock: 'agenda.edit',
       'wait-close': 'agenda.edit', refund: 'finance.refund'
@@ -179,13 +182,16 @@ export async function manage(operation: string, form: FormData) {
     if (scope ? !can(member, scope) : member.role !== 'ADMIN') throw new AgendaError('Seu acesso não permite esta operação.')
     switch (operation) {
       case 'settings': {
-        if (member.role !== 'ADMIN') throw new AgendaError('Seu acesso não permite esta operação.')
         const data = z.object({
           name: title, description: text, address: text, color: z.string().regex(/^#[\da-f]{6}$/i),
           depositPercent: z.coerce.number().int().min(1).max(100).default(100),
           reminderTemplate: z.string().trim().max(500).default(''),
-          reminderMinutes: z.coerce.number().int().min(0).max(10080)
+          reminderMinutes: z.coerce.number().int().min(0).max(10080).default(0)
         }).parse(body)
+        if (member.role !== 'ADMIN') {
+          await db.tenant.update({ where: { id: tenantId }, data: { name: data.name, description: data.description, address: data.address, color: data.color } })
+          break
+        }
         const onlinePayment = form.has('onlinePayment')
         if (onlinePayment && (!tenant.stripeAccountId || !(await (await stripe()).accounts.retrieve(tenant.stripeAccountId)).charges_enabled)) {
           throw new AgendaError('Conclua a configuração da conta para aceitar pagamentos.')
@@ -228,6 +234,17 @@ export async function manage(operation: string, form: FormData) {
         await closeAppointment(tenantId, data.id, data.status, user.id)
         break
       }
+      case 'booking': {
+        if (!can(member, 'customer.read')) throw new AgendaError('Seu acesso não permite consultar clientes.')
+        const data = z.object({ customerId: id, serviceId: id, professionalId: id, startsAt: z.string() }).parse(body)
+        const customer = await db.customer.findFirst({ where: { tenantId, id: data.customerId } })
+        if (!customer) throw new AgendaError('Cliente indisponível.')
+        await book(tenant, {
+          serviceId: data.serviceId, professionalId: data.professionalId, startsAt: localDateTime(data.startsAt, tenant.timezone).toISOString(),
+          name: customer.name, phone: customer.phone, consent: false, online: false
+        })
+        return '/agenda'
+      }
       case 'reschedule': {
         const data = z.object({ id, startsAt: z.string() }).parse(body)
         await rescheduleAppointment(tenant, data.id, localDateTime(data.startsAt, tenant.timezone), user.id)
@@ -265,10 +282,10 @@ export async function manage(operation: string, form: FormData) {
         throw new AgendaError('Operação indisponível.')
     }
     return '/dashboard'
-  }, ['reschedule', 'block', 'unblock', 'wait-close'].includes(operation) ? '/agenda' : '/dashboard')
+  }, ['booking', 'reschedule', 'block', 'unblock', 'wait-close'].includes(operation) ? '/agenda' : '/dashboard')
 }
 
-export async function brandSettings(operation: 'profile' | 'upload' | 'delete', form: FormData) {
+export async function brandSettings(operation: 'profile' | 'upload' | 'delete' | 'address', form: FormData) {
   await perform(async () => {
     const user = await userSession()
     if (!user) return '/login'
@@ -284,8 +301,11 @@ export async function brandSettings(operation: 'profile' | 'upload' | 'delete', 
       await db.tenant.update({ where: { id: tenantId }, data: {
         ...values, contactPhone: values.contactPhone || null, instagramUrl: values.instagramUrl || null
       } })
+    } else if (operation === 'address') {
+      if (member.role !== 'ADMIN') throw new AgendaError('Somente o administrador pode alterar o endereço público.')
+      await changePublicAddress(tenantId, slug.parse(form.get('slug')))
     } else if (operation === 'upload') {
-      const kind = z.enum(['LOGO', 'BANNER', 'COVER', 'PROFESSIONAL', 'SERVICE', 'PRODUCT', 'GALLERY']).parse(form.get('kind'))
+      const kind = z.enum(['LOGO', 'PROFILE', 'BANNER', 'COVER', 'PROFESSIONAL', 'SERVICE', 'PRODUCT', 'GALLERY']).parse(form.get('kind'))
       const files = form.get('image')
       if (!(files instanceof File)) throw new AgendaError('Selecione uma imagem.')
       const target = kind === 'GALLERY' ? randomUUID() : ['PROFESSIONAL','SERVICE','PRODUCT'].includes(kind) ? id.parse(form.get('target')) : ''

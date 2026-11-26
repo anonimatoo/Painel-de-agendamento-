@@ -63,3 +63,8 @@ summary{cursor:pointer;font-weight:650}
 .dark-profile{background:#251447;color:white}
 .dark-profile p{color:#eee8fa}
 .preserve-lines{white-space:pre-line;overflow-wrap:anywhere}
+.dark-workspace{--ink:#f4effc;--muted:#e0d5ee;--border:#513d68;background:#201632;color:var(--ink)}
+.dark-workspace article,.dark-workspace input,.dark-workspace textarea,.dark-workspace select{background:#302145;color:var(--ink)}
+.dark-workspace .outline{background:#36264b;color:var(--ink)}
+.dark-workspace .eyebrow{color:#c9a5f9}
+meter{width:min(100%,36rem);height:1.2rem}

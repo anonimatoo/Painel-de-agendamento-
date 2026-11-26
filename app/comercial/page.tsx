@@ -36,6 +36,10 @@ export default async function CommercePage({ searchParams }: { searchParams: Pro
       <article><p>Saídas no mês</p><strong>{brl(negative)}</strong></article>
       <article><p>Saldo de caixa no mês</p><strong>{brl(positive - negative)}</strong></article>
     </section>
+    <article><h2>Comparativo do mês</h2>
+      <label>Entradas · {brl(positive)}<meter value={positive} max={Math.max(positive, negative, 1)} /></label>
+      <label>Saídas · {brl(negative)}<meter value={negative} max={Math.max(positive, negative, 1)} /></label>
+    </article>
     <article><h2>Contas a pagar e a receber</h2>
       {can(member, 'finance.write') && <form className="inline" action={commerce.bind(null, 'entry')}>
         <Field label="Descrição" name="title" />

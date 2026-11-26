@@ -122,3 +122,19 @@ test('alteração do endereço Evolution se limita aos destinos configurados', a
   assert.throws(() => authorizedEvolutionUrl(pinned + '?query=1', pinned))
   assert.throws(() => authorizedEvolutionUrl('ftp://mensagens.example.test/api', pinned))
 })
+
+test('endereço público anterior permanece reservado após alteração', async () => {
+  const { changePublicAddress } = await import('../lib/public-identity')
+  const first = await db.tenant.create({ data: { slug: randomUUID(), name: 'Primeiro' } })
+  const second = await db.tenant.create({ data: { slug: randomUUID(), name: 'Segundo' } })
+  try {
+    const changed = randomUUID()
+    await changePublicAddress(first.id, changed)
+    await assert.rejects(changePublicAddress(second.id, first.slug))
+    assert.equal((await db.tenantAlias.findUniqueOrThrow({ where: { slug: first.slug } })).tenantId, first.id)
+    await changePublicAddress(first.id, first.slug)
+    assert.equal((await db.tenantAlias.findUniqueOrThrow({ where: { slug: changed } })).tenantId, first.id)
+  } finally {
+    await db.tenant.deleteMany({ where: { id: { in: [first.id, second.id] } } })
+  }
+})

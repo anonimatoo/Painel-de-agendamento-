@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { notFound } from 'next/navigation'
+import { notFound, redirect } from 'next/navigation'
 import { DateTime } from 'luxon'
 import { db } from '@/lib/db'
 import { AgendaError, availability } from '@/lib/agenda'
@@ -25,11 +25,18 @@ export default async function Establishment({ params, searchParams }: {
       products: { where: { stock: { gt: 0 } } }
     }
   })
-  if (!tenant) notFound()
+  if (!tenant) {
+    const alias = await db.tenantAlias.findUnique({ where: { slug }, include: { tenant: { select: { slug: true, active: true, suspended: true } } } })
+    if (!alias?.tenant.active || alias.tenant.suspended) notFound()
+    const preserved = new URLSearchParams()
+    for (const [key, value] of Object.entries(query)) if (typeof value === 'string' && value.length <= 500) preserved.set(key, value)
+    redirect('/estabelecimento/' + encodeURIComponent(alias.tenant.slug) + (preserved.size ? '?' + preserved : ''))
+  }
   const image = (kind: string, target = '') => tenant.media.find(item => item.kind === kind && item.target === target)?.key
   const cover = image('COVER') ?? tenant.coverKey
   const banner = image('BANNER')
   const logo = image('LOGO')
+  const profile = image('PROFILE')
   const gallery = tenant.media.filter(item => item.kind === 'GALLERY')
   const confirmed = typeof query.reserva === 'string' && query.reserva.length < 100 && query.reserva !== 'pagamento'
     ? await db.appointment.count({ where: { id: query.reserva, tenantId: tenant.id, status: 'CONFIRMED' } })
@@ -61,6 +68,7 @@ export default async function Establishment({ params, searchParams }: {
         {banner && <img className="cover" src={'/api/imagens/' + banner} alt="" />}
         {cover && <img className="cover" src={'/api/imagens/' + cover} alt="" />}
         {logo && <img width={64} height={64} className="profile-logo" src={'/api/imagens/' + logo} alt="" />}
+        {profile && <img width={96} height={96} className="profile-logo" src={'/api/imagens/' + profile} alt={'Foto de ' + tenant.name} />}
         <h1>{tenant.name}</h1><p>{tenant.description}</p>{tenant.address && <p>{tenant.address}</p>}
         <nav className="inline" aria-label="Contato">
           {tenant.instagramUrl && <a href={tenant.instagramUrl} rel="noreferrer">Instagram</a>}

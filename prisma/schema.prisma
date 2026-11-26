@@ -540,3 +540,22 @@ model WorkerHeartbeat {
   id Int @id
   seenAt DateTime
 }
+
+model StripeMovement {
+  id String @id @default(cuid())
+  scope String
+  stripeId String
+  sourceId String?
+  customerId String?
+  intentId String?
+  category String
+  status String
+  gross Int
+  fee Int
+  net Int
+  currency String
+  occurredAt DateTime
+  recordedAt DateTime @default(now())
+  @@index([scope, stripeId, recordedAt])
+  @@index([scope, occurredAt])
+}

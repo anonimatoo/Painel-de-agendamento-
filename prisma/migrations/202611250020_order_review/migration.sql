@@ -1,0 +1,1 @@
+ALTER TABLE "ShopOrder" ADD COLUMN "paymentReview" BOOLEAN NOT NULL DEFAULT false;

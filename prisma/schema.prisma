@@ -9,18 +9,25 @@ enum Role {
   MANAGER
   RECEPTION
   PROFESSIONAL
+  FINANCE
+  READONLY
 }
 enum Status {
   PENDING
   CONFIRMED
   COMPLETED
   CANCELED
+  NO_SHOW
 }
 model User {
   id String @id @default(cuid())
   email String @unique
   password String
   platformAdmin Boolean @default(false)
+  emailVerifiedAt DateTime?
+  mfaSecret String?
+  mfaCounter Int?
+  accountTokens AccountToken[]
   sessions Session[]
   memberships Member[]
   createdAt DateTime @default(now())
@@ -30,29 +37,56 @@ model Session {
   userId String
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
   expiresAt DateTime
+  mfaVerified Boolean @default(false)
   @@index([expiresAt])
 }
 model Tenant {
   id String @id @default(cuid())
   slug String @unique
+  aliases TenantAlias[]
   name String
   description String @default("")
   address String @default("")
   color String @default("#6d42dd")
   coverKey String? @unique
+  instagramUrl String?
+  contactPhone String?
+  policies String @default("")
+  theme String @default("light")
+  media MediaAsset[]
   timezone String @default("America/Sao_Paulo")
   active Boolean @default(false)
   suspended Boolean @default(false)
   stripeCustomerId String? @unique
+  billingCheckout BillingCheckout?
+  billingSyncAt DateTime?
+  billingInvoices BillingInvoice[]
+  commercialNotices CommercialNotice[]
   stripeAccountId String? @unique
+  connectPausedAt DateTime?
   onlinePayment Boolean @default(false)
+  depositPercent Int @default(100)
+  platformFeeBps Int?
+  platformFeeFixed Int?
   whatsappInstance String? @unique
+  reminderTemplate String?
+  statusMessages Boolean @default(false)
+  reminderPresets Int[] @default([])
+  whatsappTemplates Json?
+  birthdayMessages Boolean @default(false)
+  returnAfterDays Int?
+  completionMessages Boolean @default(false)
+  reviewUrl String?
   reminderMinutes Int?
   members Member[]
+  teamInvites TeamInvite[]
+  teamEvents TeamEvent[]
   services Service[]
   professionals Professional[]
   customers Customer[]
   products Product[]
+  financialEntries FinancialEntry[]
+  orders ShopOrder[]
   appointments Appointment[]
   subscriptions Subscription[]
   createdAt DateTime @default(now())
@@ -61,9 +95,15 @@ model Member {
   tenantId String
   userId String
   role Role
+  disabledAt DateTime?
+  permissions String[] @default([])
+  permissionsCustomized Boolean @default(false)
+  professionalId String?
+  professional Professional? @relation(fields: [tenantId, professionalId], references: [tenantId, id])
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   @@id([tenantId, userId])
+  @@unique([tenantId, professionalId])
   @@index([userId])
 }
 model Service {
@@ -77,6 +117,7 @@ model Service {
   active Boolean @default(true)
   assignments Assignment[]
   appointments Appointment[]
+  waitlist WaitEntry[]
   @@unique([tenantId, id])
 }
 model Professional {
@@ -85,8 +126,14 @@ model Professional {
   tenant Tenant @relation(fields: [tenantId], references: [id])
   name String
   active Boolean @default(true)
+  commissionBps Int @default(0)
+  commissionFixed Int @default(0)
   assignments Assignment[]
   hours WorkHours[]
+  blocks ScheduleBlock[]
+  teamMembers Member[]
+  teamInvites TeamInvite[]
+  waitlist WaitEntry[]
   appointments Appointment[]
   @@unique([tenantId, id])
 }
@@ -114,19 +161,71 @@ model Customer {
   tenant Tenant @relation(fields: [tenantId], references: [id])
   name String
   phone String
+  birthMonthDay String?
+  followupConsentAt DateTime?
   appointments Appointment[]
   @@unique([tenantId, id])
   @@unique([tenantId, phone])
+  @@index([birthMonthDay])
 }
 model Product {
   id String @id @default(cuid())
   tenantId String
   tenant Tenant @relation(fields: [tenantId], references: [id])
   name String
+  category String @default("")
   cents Int
+  costCents Int @default(0)
+  promotionCents Int?
+  minimumStock Int @default(0)
   stock Int
+  movements StockMovement[]
+  orderItems ShopOrderItem[]
   @@index([tenantId])
+  @@unique([tenantId, id])
 }
+
+enum MovementKind {
+  ADJUSTMENT
+  SALE
+  REVERSAL
+}
+
+model StockMovement {
+  id String @id @default(cuid())
+  tenantId String
+  productId String
+  product Product @relation(fields: [tenantId, productId], references: [tenantId, id])
+  kind MovementKind
+  quantity Int
+  unitCents Int @default(0)
+  unitCostCents Int @default(0)
+  requestId String
+  reversedAt DateTime?
+  createdAt DateTime @default(now())
+  @@unique([tenantId, requestId])
+  @@index([tenantId, createdAt])
+}
+
+enum EntryKind {
+  INCOME
+  EXPENSE
+}
+
+model FinancialEntry {
+  id String @id @default(cuid())
+  tenantId String
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+  kind EntryKind
+  title String
+  cents Int
+  dueAt DateTime
+  paidAt DateTime?
+  createdAt DateTime @default(now())
+  @@index([tenantId, dueAt])
+  @@index([tenantId, paidAt])
+}
+
 model Appointment {
   id String @id @default(cuid())
   tenantId String
@@ -142,10 +241,20 @@ model Appointment {
   status Status
   cents Int
   paidAt DateTime?
+  chargeCents Int?
+  platformFeeCents Int @default(0)
+  commission ProfessionalCommission?
+  paymentIntentId String? @unique
+  refundedAt DateTime?
   consent Boolean @default(false)
   checkoutId String? @unique
   expiresAt DateTime?
+  checkoutReturnUrl String?
+  checkoutAccountId String?
+  checkoutState String?
+  paymentToken String? @unique
   reminders Reminder[]
+  history AppointmentHistory[]
   createdAt DateTime @default(now())
   @@index([tenantId, startsAt])
 }
@@ -153,6 +262,9 @@ model Plan {
   id String @id @default(cuid())
   name String
   description String
+  trialDays Int @default(0)
+  platformFeeBps Int @default(0)
+  platformFeeFixed Int @default(0)
   monthlyCents Int
   annualCents Int
   monthlyPriceId String @unique
@@ -173,6 +285,7 @@ model Subscription {
 model WebhookEvent {
   id String @id
   type String
+  source String?
   createdAt DateTime @default(now())
 }
 model Reminder {
@@ -180,8 +293,288 @@ model Reminder {
   appointmentId String
   appointment Appointment @relation(fields: [appointmentId], references: [id])
   runAt DateTime
+  kind String @default("REMINDER")
+  scheduledStart DateTime?
   sentAt DateTime?
   claimedAt DateTime?
-  @@unique([appointmentId, runAt])
+  deliveryState String @default("QUEUED")
+  deliveryAttempts Int @default(0)
+  retryAt DateTime?
+  providerMessageId String?
+  dedupeKey String? @unique
+  @@unique([appointmentId, runAt, kind])
   @@index([sentAt, runAt])
+}
+
+enum TokenPurpose {
+  PASSWORD_RESET
+  EMAIL_VERIFY
+}
+
+model AccountToken {
+  tokenHash String @id
+  purpose TokenPurpose
+  userId String
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  @@unique([userId, purpose])
+  @@index([expiresAt])
+}
+
+model RateLimit {
+  key String @id
+  count Int
+  expiresAt DateTime
+  @@index([expiresAt])
+}
+
+model AdminAudit {
+  id String @id @default(cuid())
+  actorId String
+  action String
+  targetId String
+  createdAt DateTime @default(now())
+  @@index([createdAt])
+}
+
+model BillingCheckout {
+  id String @id @default(cuid())
+  tenantId String @unique
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  priceId String
+  customerId String
+  trialDays Int
+  expiresAt DateTime
+}
+
+model StripeSettings {
+  id Int @id
+  accountId String
+  publishableKey String
+  mode String
+  encrypted String
+  previousWebhooks String?
+  previousWebhooksUntil DateTime?
+  paused Boolean @default(false)
+  checkedAt DateTime?
+  checkSucceeded Boolean?
+  paymentsEnabled Boolean?
+  payoutsEnabled Boolean?
+  updatedAt DateTime @updatedAt
+}
+
+model ScheduleBlock {
+  id String @id @default(cuid())
+  tenantId String
+  professionalId String
+  professional Professional @relation(fields: [tenantId, professionalId], references: [tenantId, id])
+  startsAt DateTime @db.Timestamptz(3)
+  endsAt DateTime @db.Timestamptz(3)
+  reason String
+  @@index([tenantId, professionalId, startsAt])
+}
+
+model AppointmentHistory {
+  id String @id @default(cuid())
+  appointmentId String
+  appointment Appointment @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+  actorId String?
+  operation String
+  previousStart DateTime?
+  newStart DateTime?
+  createdAt DateTime @default(now())
+  @@index([appointmentId, createdAt])
+}
+
+model WaitEntry {
+  id String @id @default(cuid())
+  tenantId String
+  serviceId String
+  professionalId String
+  professional Professional @relation(fields: [tenantId, professionalId], references: [tenantId, id])
+  service Service @relation(fields: [tenantId, serviceId], references: [tenantId, id])
+  day String
+  name String
+  phone String
+  closedAt DateTime?
+  createdAt DateTime @default(now())
+  @@unique([tenantId, professionalId, serviceId, day, phone])
+  @@index([tenantId, day])
+}
+
+enum MediaKind {
+  LOGO
+  BANNER
+  COVER
+  PROFESSIONAL
+  SERVICE
+  PRODUCT
+  GALLERY
+  PROFILE
+}
+
+model MediaAsset {
+  id String @id @default(cuid())
+  tenantId String
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  kind MediaKind
+  target String
+  key String @unique
+  bytes Int
+  createdAt DateTime @default(now())
+  @@unique([tenantId, kind, target])
+}
+
+enum OrderStatus {
+  PENDING
+  PAID
+  CANCELED
+  REFUNDED
+}
+
+model ShopOrder {
+  id String @id @default(cuid())
+  tenantId String
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+  requestId String
+  customerName String
+  phone String
+  cents Int
+  platformFeeCents Int @default(0)
+  status OrderStatus @default(PENDING)
+  paymentReview Boolean @default(false)
+  checkoutId String? @unique
+  paymentIntentId String? @unique
+  expiresAt DateTime
+  paidAt DateTime?
+  refundedAt DateTime?
+  createdAt DateTime @default(now())
+  items ShopOrderItem[]
+  @@unique([tenantId, requestId])
+  @@unique([tenantId, id])
+  @@index([status, expiresAt])
+}
+
+model ShopOrderItem {
+  tenantId String
+  orderId String
+  productId String
+  quantity Int
+  name String
+  unitCents Int
+  order ShopOrder @relation(fields: [tenantId, orderId], references: [tenantId, id], onDelete: Cascade)
+  product Product @relation(fields: [tenantId, productId], references: [tenantId, id])
+  @@id([orderId, productId])
+}
+
+model BillingInvoice {
+  id String @id
+  tenantId String
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  status String
+  currency String
+  amountDue Int
+  amountPaid Int
+  hostedUrl String?
+  issuedAt DateTime
+  updatedAt DateTime @updatedAt
+  @@index([tenantId, issuedAt])
+}
+
+model TeamInvite {
+  tokenHash String @id
+  tenantId String
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  email String
+  role Role
+  professionalId String?
+  professional Professional? @relation(fields: [tenantId, professionalId], references: [tenantId, id])
+  expiresAt DateTime
+  @@unique([tenantId, email])
+}
+
+model TeamEvent {
+  id String @id @default(cuid())
+  tenantId String
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  actorId String
+  subject String
+  action String
+  createdAt DateTime @default(now())
+  @@index([tenantId, createdAt])
+}
+
+model ProfessionalCommission {
+  appointmentId String @id
+  appointment Appointment @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+  cents Int
+  paidAt DateTime?
+  createdAt DateTime @default(now())
+}
+
+model CommercialRule {
+  kind String @id
+  enabled Boolean @default(false)
+  hour Int
+  leadDays Int
+  template String
+}
+
+model CommercialNotice {
+  id String @id @default(cuid())
+  tenantId String
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  kind String
+  reference String
+  invoiceId String?
+  subscriptionId String?
+  sendAt DateTime
+  state String @default("QUEUED")
+  claimedAt DateTime?
+  attempts Int @default(0)
+  planName String?
+  cents Int?
+  dueAt DateTime?
+  @@unique([tenantId, kind, reference])
+  @@index([state, sendAt])
+}
+
+model EvolutionSetting {
+  id Int @id
+  endpoint String
+  encryptedKey String
+  qrEnabled Boolean @default(false)
+  checkedAt DateTime
+}
+
+model WorkerHeartbeat {
+  id Int @id
+  seenAt DateTime
+}
+
+model StripeMovement {
+  id String @id @default(cuid())
+  scope String
+  stripeId String
+  sourceId String?
+  customerId String?
+  intentId String?
+  category String
+  status String
+  gross Int
+  fee Int
+  net Int
+  currency String
+  occurredAt DateTime
+  recordedAt DateTime @default(now())
+  @@index([scope, stripeId, recordedAt])
+  @@index([scope, occurredAt])
+}
+
+model TenantAlias {
+  slug String @id
+  tenantId String
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  @@index([tenantId])
 }

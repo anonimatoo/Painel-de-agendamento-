@@ -17,10 +17,10 @@ export async function verifyPassword(password: string, stored?: string) {
   return !!stored && actual.length === stored.length && timingSafeEqual(Buffer.from(actual), Buffer.from(stored))
 }
 
-export async function startSession(userId: string) {
+export async function startSession(userId: string, mfaVerified = false) {
   const token = randomBytes(32).toString('base64url')
   const expires = new Date(Date.now() + 7 * 86_400_000)
-  await db.session.create({ data: { tokenHash: digest(token), userId, expiresAt: expires } })
+  await db.session.create({ data: { tokenHash: digest(token), userId, expiresAt: expires, mfaVerified } })
   ;(await cookies()).set(cookieName, token, {
     expires, httpOnly: true, sameSite: 'lax', path: '/',
     secure: process.env.APP_URL?.startsWith('https://') ?? process.env.NODE_ENV === 'production'
@@ -31,7 +31,7 @@ export async function userSession() {
   const token = (await cookies()).get(cookieName)?.value
   if (!token) return null
   const session = await db.session.findUnique({ where: { tokenHash: digest(token) }, include: { user: true } })
-  return session && session.expiresAt > new Date() ? session.user : null
+  return session && session.expiresAt > new Date() ? { ...session.user, adminMfaVerified: session.mfaVerified && Boolean(session.user.mfaSecret) } : null
 }
 
 export async function endSession() {
@@ -42,5 +42,5 @@ export async function endSession() {
 }
 
 export async function membership(userId: string) {
-  return db.member.findFirst({ where: { userId }, include: { tenant: true }, orderBy: { tenantId: 'asc' } })
+  return db.member.findFirst({ where: { userId, disabledAt: null }, include: { tenant: true }, orderBy: { tenantId: 'asc' } })
 }

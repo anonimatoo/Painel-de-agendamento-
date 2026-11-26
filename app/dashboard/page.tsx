@@ -1,13 +1,16 @@
+import { can } from '@/lib/permissions'
 import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { CalendarDays, ClipboardList, Settings, UsersRound, Wallet } from 'lucide-react'
 import { DateTime } from 'luxon'
+import { connectStatus } from '@/lib/connect'
 import { db } from '@/lib/db'
 import { membership, userSession } from '@/lib/auth'
-import { logout, manage } from '../actions'
+import { WhatsAppControls } from '../whatsapp-controls'
+import { customerPreferences, logout, manage } from '../actions'
 import { Brand, ErrorNote, Field, brl } from '../ui'
 
-const labels = { CONFIRMED: 'Confirmado', PENDING: 'Aguardando pagamento', CANCELED: 'Cancelado', COMPLETED: 'Concluído' }
+const labels = { CONFIRMED: 'Confirmado', PENDING: 'Aguardando pagamento', CANCELED: 'Cancelado', NO_SHOW: 'Faltou', COMPLETED: 'Concluído' }
 const weekdays = ['Segunda-feira', 'Terça-feira', 'Quarta-feira', 'Quinta-feira', 'Sexta-feira', 'Sábado', 'Domingo']
 
 export default async function Dashboard({ searchParams }: { searchParams: Promise<{ erro?: string; assinatura?: string }> }) {
@@ -16,32 +19,35 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
   const member = await membership(user.id)
   if (!member) redirect(user.platformAdmin ? '/super-admin' : '/')
   const { tenant, role } = member
+  const own = role === 'PROFESSIONAL' && can(member, 'agenda.read') ? member.professionalId : null
   const enabled = tenant.active && !tenant.suspended
-  const manager = role === 'ADMIN' || role === 'MANAGER'
-  const desk = manager || role === 'RECEPTION'
+  const manager = can(member, 'service.read') || can(member, 'service.manage') || can(member, 'team.professionals') || can(member, 'product.manage')
+  const desk = role !== 'PROFESSIONAL' && can(member, 'agenda.read')
   const tenantId = tenant.id
   const month = DateTime.now().setZone(tenant.timezone).startOf('month')
   const query = await searchParams
-  const [plans, services, professionals, customers, products, appointments, monthlyCount, paid] = await Promise.all([
+  const [plans, services, professionals, customers, products, appointments, monthlyCount, paid, connect] = await Promise.all([
     role === 'ADMIN' && !enabled ? db.plan.findMany({ where: { active: true } }) : [],
-    enabled && manager ? db.service.findMany({ where: { tenantId }, orderBy: { name: 'asc' } }) : [],
-    enabled && manager ? db.professional.findMany({ where: { tenantId }, orderBy: { name: 'asc' }, include: { hours: true, assignments: { include: { service: true } } } }) : [],
-    enabled && desk ? db.customer.findMany({ where: { tenantId }, orderBy: { name: 'asc' }, take: 100 }) : [],
-    enabled && manager ? db.product.findMany({ where: { tenantId }, orderBy: { name: 'asc' } }) : [],
-    enabled && desk ? db.appointment.findMany({
-      where: { tenantId, startsAt: { gte: month.toJSDate() } }, orderBy: { startsAt: 'asc' }, take: 100,
+    enabled && manager && (can(member, 'service.read') || can(member, 'service.manage') || can(member, 'team.professionals')) ? db.service.findMany({ where: { tenantId }, orderBy: { name: 'asc' } }) : [],
+    enabled && manager && can(member, 'team.professionals') ? db.professional.findMany({ where: { tenantId }, orderBy: { name: 'asc' }, include: { hours: true, assignments: { include: { service: true } } } }) : [],
+    enabled && desk && can(member, 'customer.read') ? db.customer.findMany({ where: { tenantId }, orderBy: { name: 'asc' }, take: 100 }) : [],
+    enabled && manager && can(member, 'product.manage') ? db.product.findMany({ where: { tenantId }, orderBy: { name: 'asc' } }) : [],
+    enabled && (desk || own) ? db.appointment.findMany({
+      where: { tenantId, ...(own ? { professionalId: own } : {}), startsAt: { gte: month.toJSDate() } }, orderBy: { startsAt: 'asc' }, take: 100,
       include: { service: true, customer: true, professional: true }
     }) : [],
     enabled && desk ? db.appointment.count({ where: { tenantId, status: { in: ['CONFIRMED','COMPLETED'] }, startsAt: { gte: month.toJSDate(), lt: month.plus({ months: 1 }).toJSDate() } } }) : 0,
-    enabled && manager ? db.appointment.aggregate({ where: { tenantId, paidAt: { gte: month.toJSDate(), lt: month.plus({ months: 1 }).toJSDate() } }, _sum: { cents: true } }) : null
+    enabled && can(member, 'finance.read') ? db.appointment.findMany({ where: { tenantId, refundedAt: null, paidAt: { gte: month.toJSDate(), lt: month.plus({ months: 1 }).toJSDate() } }, select: { cents: true, chargeCents: true } }) : [],
+    enabled && role === 'ADMIN' && tenant.stripeAccountId ? connectStatus(tenant.stripeAccountId).catch(() => null) : null
   ])
-  return <div className="shell">
+  return <div className={tenant.theme === 'dark' ? 'shell dark-workspace' : 'shell'}>
     <aside><Brand /><nav>
       <Link href="/dashboard"><ClipboardList /> Visão geral</Link>
-      {enabled && desk && <a href="#agenda"><CalendarDays /> Agenda</a>}
+      {enabled && desk && <Link href="/agenda"><CalendarDays /> Agenda</Link>}
+      {enabled && (can(member, 'finance.read') || can(member, 'stock.manage') || can(member, 'sale.create') || can(member, 'product.manage')) && <Link href="/comercial"><Wallet /> Estoque e financeiro</Link>}
       {enabled && manager && <a href="#equipe"><UsersRound /> Equipe e catálogo</a>}
-      {enabled && role === 'ADMIN' && <a href="#configuracoes"><Settings /> Configurações</a>}
-    </nav><form action={logout}><button className="subtle">Sair</button></form></aside>
+      {enabled && can(member, 'settings.manage') && <a href="#configuracoes"><Settings /> Configurações</a>}
+    {enabled && can(member, 'brand.manage') && role !== 'ADMIN' && <Link href="/personalizacao">Personalizar página</Link>}{role === 'ADMIN' && <Link href="/primeiro-acesso">Primeiro acesso</Link>}{enabled && role === 'ADMIN' && <Link href="/equipe">Equipe e permissões</Link>}{enabled && can(member, 'whatsapp.manage') && <Link href="/whatsapp">WhatsApp</Link>}<Link href="/conta">Minha conta</Link></nav><form action={logout}><button className="subtle">Sair</button></form></aside>
     <main className="content">
       <div className="row"><div><p className="eyebrow">Estabelecimento</p><h1>{tenant.name}</h1></div>
         {enabled && <Link className="button outline" href={'/estabelecimento/' + tenant.slug}>Ver página pública</Link>}</div>
@@ -53,22 +59,37 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
           <input type="hidden" name="planId" value={plan.id} /><label>{plan.name}<select name="cycle"><option value="monthly">{brl(plan.monthlyCents)} por mês</option><option value="annual">{brl(plan.annualCents)} por ano</option></select></label><button>Assinar</button>
         </form>)}
       </article>}
+      {enabled && own && <article><h2>Meus atendimentos</h2>{appointments.length ? <ul>{appointments.map(item => <li key={item.id}>
+        {DateTime.fromJSDate(item.startsAt, { zone: tenant.timezone }).toFormat('dd/LL/yyyy HH:mm')} · {item.customer.name} · {item.service.name} · {labels[item.status]}
+      </li>)}</ul> : <p>Nenhum atendimento na sua agenda.</p>}</article>}
       {enabled && desk && <>
         <section className="grid metrics">
           <article><CalendarDays /><p>Atendimentos no mês</p><strong>{monthlyCount}</strong></article>
-          {manager && <article><Wallet /><p>Recebido online no mês</p><strong>{brl(paid?._sum.cents ?? 0)}</strong></article>}
+          {can(member, 'finance.read') && <article><Wallet /><p>Recebido online no mês</p><strong>{brl(paid.reduce((sum, row) => sum + (row.chargeCents ?? row.cents), 0))}</strong></article>}
         </section>
         <article id="agenda"><h2>Agenda</h2>
           {!appointments.length ? <p>Nenhum atendimento para exibir.</p> : <div className="scroll"><table><thead><tr><th>Horário</th><th>Cliente</th><th>Serviço</th><th>Profissional</th><th>Situação</th><th>Ações</th></tr></thead>
           <tbody>{appointments.map(item => <tr key={item.id}><td>{DateTime.fromJSDate(item.startsAt, { zone: tenant.timezone }).toFormat('dd/LL/yyyy HH:mm')}</td><td>{item.customer.name}</td><td>{item.service.name}</td><td>{item.professional.name}</td><td>{labels[item.status]}</td><td>
             {item.status === 'CONFIRMED' && <form className="inline" action={manage.bind(null, 'appointment')}><input type="hidden" name="id" value={item.id} />
             {item.startsAt <= new Date() && <button className="outline" name="status" value="COMPLETED">Concluir</button>}
+            {item.startsAt <= new Date() && <button className="outline" name="status" value="NO_SHOW">Registrar falta</button>}
             {!item.paidAt && <button className="outline" name="status" value="CANCELED">Cancelar</button>}</form>}
+            {can(member, 'finance.refund') && item.status === 'CONFIRMED' && item.paidAt && <form action={manage.bind(null, 'refund')}>
+              <input type="hidden" name="id" value={item.id} /><button className="outline">Estornar e cancelar</button>
+            </form>}
           </td></tr>)}</tbody></table></div>}
         </article>
         <article><h2>Clientes</h2>
           <form className="inline" action={manage.bind(null, 'customer')}><Field label="Nome" name="name" /><Field label="Telefone com DDI" name="phone" type="tel" /><button>Adicionar cliente</button></form>
-          {customers.length > 0 && <ul>{customers.map(c => <li key={c.id}>{c.name} · +{c.phone}</li>)}</ul>}
+          {customers.length > 0 && <ul>{customers.map(c => <li key={c.id}>{c.name} · +{c.phone}
+            {can(member, 'customer.edit') && <details><summary>Editar cadastro e preferências</summary>
+              <form action={customerPreferences} className="inline"><input type="hidden" name="id" value={c.id} />
+                <Field label="Nome" name="name" value={c.name} />
+                <Field label="Aniversário (somente dia e mês serão guardados)" name="birthday" type="date" required={false} value={c.birthMonthDay ? '2000-' + c.birthMonthDay : ''} />
+                <label className="check"><input name="followupConsent" type="checkbox" defaultChecked={Boolean(c.followupConsentAt)} /> Cliente autorizou WhatsApp de aniversário ou retorno</label>
+                <button>Salvar preferências do cliente</button>
+              </form>
+            </details>}</li>)}</ul>}
         </article>
       </>}
       {enabled && manager && <section className="grid" id="equipe">
@@ -95,19 +116,30 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
           <Field label="Estoque inicial" name="stock" type="number" min={0} /><button>Adicionar produto</button>
         </form>{products.length > 0 && <ul>{products.map(p => <li key={p.id}>{p.name} · {brl(p.cents)} · {p.stock} em estoque</li>)}</ul>}</article>
       </section>}
-      {enabled && role === 'ADMIN' && <article id="configuracoes"><h2>Configurações</h2>
+      {enabled && role !== 'ADMIN' && can(member, 'settings.manage') && <article id="configuracoes"><h2>Configurações gerais</h2>
+        <form action={manage.bind(null, 'settings')}>
+          <Field label="Nome" name="name" value={tenant.name} /><Field label="Descrição" name="description" value={tenant.description} required={false} />
+          <Field label="Endereço" name="address" value={tenant.address} required={false} /><Field label="Cor da página" name="color" type="color" value={tenant.color} />
+          <button>Salvar configurações gerais</button>
+        </form>
+      </article>}
+      {enabled && role === 'ADMIN' && <article id="configuracoes"><h2>Configurações</h2><Link href="/recebimentos">Receber pagamentos</Link><Link href="/personalizacao">Personalizar página pública</Link>
         <form action={manage.bind(null, 'settings')}>
           <Field label="Nome" name="name" value={tenant.name} /><Field label="Descrição" name="description" value={tenant.description} required={false} />
           <Field label="Endereço" name="address" value={tenant.address} required={false} /><Field label="Cor da página" name="color" type="color" value={tenant.color} />
           {tenant.whatsappInstance && <Field label="Enviar lembrete quantos minutos antes? (0 desativa)" name="reminderMinutes" type="number" min={0} value={tenant.reminderMinutes ?? 0} />}
+          {tenant.whatsappInstance && <Field label="Mensagem do lembrete. Use {estabelecimento} e {horario} para preencher automaticamente." name="reminderTemplate" required={false} value={tenant.reminderTemplate ?? ''} />}
+          {tenant.whatsappInstance && <label className="check"><input type="checkbox" name="statusMessages" defaultChecked={tenant.statusMessages} /> Enviar avisos de confirmação, pagamento, reagendamento e cancelamento</label>}
           {!tenant.whatsappInstance && <input type="hidden" name="reminderMinutes" value="0" />}
           {tenant.stripeAccountId && <label className="check"><input type="checkbox" name="onlinePayment" defaultChecked={tenant.onlinePayment} /> Exigir pagamento online</label>}
+          {tenant.stripeAccountId && <Field label="Percentual cobrado antecipadamente" name="depositPercent" type="number" min={1} max={100} value={tenant.depositPercent} />}
           <button>Salvar configurações</button>
         </form><form action={manage.bind(null, 'cover')}>
           <label>Imagem de capa<input type="file" name="cover" accept="image/jpeg,image/png,image/webp" required /></label>
           <button className="outline">Salvar imagem</button>
-        </form><form action={manage.bind(null, 'connect')}><button className="outline">{tenant.stripeAccountId ? 'Revisar configuração de pagamentos' : 'Configurar pagamentos online'}</button></form>
+        </form>{tenant.stripeAccountId && <p>{connect ? (connect.payments ? 'Cobranças habilitadas' : connect.submitted ? 'Cadastro em análise' : 'Cadastro incompleto') + ' · ' + (connect.payouts ? 'Repasses habilitados' : 'Repasses indisponíveis') : 'Situação da conta de pagamentos indisponível.'}</p>}<form action={manage.bind(null, 'connect')}><button className="outline">{tenant.stripeAccountId ? 'Revisar configuração de pagamentos' : 'Configurar pagamentos online'}</button></form>
+        {tenant.whatsappInstance && <><h3>WhatsApp</h3><WhatsAppControls /></>}
       </article>}
-      {role === 'ADMIN' && tenant.stripeCustomerId && <article><h2>Cobrança</h2><form action={manage.bind(null, 'portal')}><button className="outline">Gerenciar assinatura</button></form></article>}
+      {role === 'ADMIN' && tenant.stripeCustomerId && <article><h2>Cobrança</h2><Link href="/assinatura">Ver faturas da assinatura</Link><form action={manage.bind(null, 'portal')}><button className="outline">Gerenciar assinatura</button></form></article>}
     </main></div>
 }

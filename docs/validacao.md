@@ -32,3 +32,43 @@ Permanecem pendentes o calendário completo com bloqueios, lista de espera e rea
 ## Homologação e produção
 
 Nenhuma integração externa foi validada em sandbox ou em produção. A homologação requer contas e credenciais de Stripe Billing e Connect, um bucket S3 e uma Evolution API compatível. Nenhuma aplicação foi implantada em produção. Os testes locais usaram PostgreSQL e Redis em contêineres descartáveis.
+
+## Branch finalizacao-comercial até a18adec
+
+A matriz acima registra a situação do commit-base `dfa6d3b`. A matriz detalhada abaixo cobre a revisão mais recente.
+
+- Treze migrations aplicadas em PostgreSQL 16 local, inclusive em um banco vazio.
+- TypeScript, lint, build de produção e dez testes automatizados executados. Os testes adicionais cobrem redefinição de senha, revogação de sessões, TOTP, limite de tentativas, concorrência de estoque, liberação de estoque, bloqueios e reagendamento.
+- Testes HTTP e fluxo de cadastro, autenticação, catálogo, agenda e reserva executados sobre o build de produção. Neste fluxo a ativação da assinatura continua sendo uma preparação local dos dados.
+- Seis telas verificadas no Chromium a 390 px e 1.280 px.
+- Redis local confirmou retentativa e deduplicação por identificador. SeaweedFS 4.55 confirmou upload, leitura WebP, isolamento, substituição e exclusão via S3.
+- Nenhuma cobrança Stripe, mensagem Evolution ou e-mail Resend foi homologado com credenciais de terceiros. Nenhum resultado de teste local representa homologação de produção.
+- Um evento local assinado com o SDK da Stripe foi entregue duas vezes ao endpoint e produziu um único registro. O evento verifica assinatura e deduplicação sem realizar uma transação externa.
+- No Chromium, um lançamento liquidado passou pelo formulário comercial. As exportações autenticadas retornaram o registro em CSV e um arquivo XLSX com tipo e assinatura esperados.
+- A auditoria de dependências ainda aponta o aviso GHSA-7589-6fvf-x4pw na cadeia do Prisma CLI. O aviso deve ser reavaliado antes do deploy.
+
+## Revisão posterior a a18adec
+
+- Build de produção, TypeScript e lint aprovados. O primeiro build identificou conflito com o nome de um componente do editor do WhatsApp. Renomeei o componente e repeti a execução completa.
+- 21 migrations aplicadas em um PostgreSQL 16 vazio e em um banco da revisão anterior.
+- 12 testes automatizados aprovados. A execução inclui regras de concorrência em agenda e estoque, retomada de Checkout com mesma chave após interrupção simulada, bloqueio de reserva incerta, estado de faturamento com eventos fora de ordem, envio ambíguo sem repetição, escopo do convite da equipe, revogação de sessão e cálculo de comissões.
+- Dez requisições HTTP passaram. O fluxo de cadastro, sessão, catálogo, agenda e reserva passou. Duas entregas de um evento local assinado resultaram em um registro.
+- Doze telas verificadas em 390 px e 1.280 px no Chromium. Registro financeiro e downloads autenticados em CSV e XLSX passaram.
+- Redis com BullMQ confirmou retentativa e deduplicação. SeaweedFS 4.55 confirmou upload, leitura, substituição, exclusão e isolamento S3.
+- Stripe, Evolution e Resend sem homologação externa. A simulação de transporte e assinatura local não usa credenciais nem transações de sandbox. Nenhum deploy ou cobrança em produção foi realizado.
+
+Consulte a [matriz atual por requisito](finalizacao.md) e o [roteiro de homologação](operacao.md#roteiro-de-homologação-externa).
+
+## Encerramento posterior a b90d4af
+
+| Verificação | Resultado local |
+| --- | --- |
+| Instalação limpa | `npm ci` instalou as dependências do lockfile. |
+| TypeScript, lint e produção | Build, `tsc --noEmit` e lint aprovados após a instalação. |
+| Migrations | Oito novas migrations aplicadas ao banco existente. Todas as 29 migrations aplicadas a um PostgreSQL 16 vazio. |
+| Suítes automatizadas | 20 testes passaram, incluindo concorrência de assinaturas e agendamentos, rotação de segredos, eventos fora de ordem, pausa Connect isolada, estoque, livro Stripe, revogação e permissões. |
+| HTTP e ponta a ponta | Dez requisições, fluxo de cadastro, sessão e reserva, e deduplicação de evento assinado local passaram. |
+| Interface | Doze telas passaram a 390 px e 1.280 px no Chromium. Lançamento e exportações CSV e XLSX do caixa aprovados. Conta de consulta bloqueada no financeiro e nos endpoints de exportação. |
+| Infraestrutura | Retentativa e deduplicação Redis/BullMQ, heartbeat do worker e upload, leitura, substituição, exclusão e isolamento em S3 compatível local confirmados. |
+
+O teste de agenda registrou um aviso de depreciação do driver pg no adaptador Prisma, sem falha de execução. As simulações de transporte Stripe verificam a lógica local, sem efetuar transações nem provar comportamento comercial em sandbox. A entrega real por Stripe, Evolution e Resend, o processamento de estornos e tarifas via provedor, a infraestrutura gerenciada e o deploy de produção permanecem sem validação externa.

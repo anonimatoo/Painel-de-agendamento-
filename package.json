@@ -9,7 +9,8 @@
     "db:deploy": "prisma migrate deploy",
     "admin": "tsx scripts/admin.ts",
     "worker": "tsx worker/index.ts",
-    "test": "tsx --test tests/*.test.ts"
+    "test": "tsx --test tests/*.test.ts",
+    "lint": "eslint ."
   },
   "engines": {
     "node": ">=22"
@@ -22,16 +23,21 @@
     "lucide-react": "^0.468.0",
     "luxon": "^3.7.0",
     "next": "^16.4.6",
+    "otpauth": "^9.6.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "sharp": "^0.35.5",
     "stripe": "^18.5.0",
+    "write-excel-file": "^4.1.1",
     "zod": "^4.6.7"
   },
   "devDependencies": {
     "@types/luxon": "^3.7.0",
     "@types/node": "^22.0.0",
     "@types/react": "^19.0.0",
+    "@typescript-eslint/parser": "^8.74.0",
+    "eslint": "^9.39.5",
+    "playwright-core": "^1.65.1",
     "prisma": "^7.10.1",
     "tsx": "^4.20.0",
     "typescript": "^5.9.0"

@@ -1,6 +1,7 @@
 import type { Prisma } from '@prisma/client'
 import { DateTime } from 'luxon'
 import type Stripe from 'stripe'
+import { existingCheckoutForNotice } from './billing'
 import { db } from './db'
 import { mailConfigured, sendEmail } from './mail'
 import { commercialLabels, type CommercialKind } from './commercial-rules'
@@ -126,6 +127,18 @@ export async function dispatchCommercial(api: () => Promise<Stripe>, now = new D
                   subscription.items.data[0]?.current_period_end === (notice.dueAt ? +notice.dueAt / 1000 : 0)
         )
       }
+      if (valid && notice.kind === 'WELCOME' && tenant?.stripeCustomerId && !tenant.active && !tenant.suspended) {
+        const checkout = await existingCheckoutForNotice(await api(), tenant.stripeCustomerId)
+        if (checkout?.url) {
+          link = checkout.url
+          const attempt = await db.billingCheckout.findUnique({ where: { tenantId: notice.tenantId } })
+          const plan = attempt ? await db.plan.findFirst({
+            where: { OR: [{ monthlyPriceId: attempt.priceId }, { annualPriceId: attempt.priceId }] }
+          }) : null
+          planName = plan?.name ?? planName
+          cents = checkout.amount_total ?? cents
+        }
+      }
       if (valid && notice.kind === 'SUSPENDED') valid = Boolean(tenant?.suspended)
       if (valid && notice.kind === 'REACTIVATED') valid = !tenant?.suspended
       if (!valid || !rule || !tenant) {
@@ -137,7 +150,7 @@ export async function dispatchCommercial(api: () => Promise<Stripe>, now = new D
         planName && 'Plano: ' + planName,
         cents === null ? null : 'Valor: ' + Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(cents / 100),
         notice.dueAt && 'Data: ' + DateTime.fromJSDate(notice.dueAt, { zone }).toFormat('dd/LL/yyyy'),
-        link && 'Fatura Stripe: ' + link
+        link && (notice.kind === 'WELCOME' ? 'Contratação Stripe: ' : 'Fatura Stripe: ') + link
       ].filter(Boolean).join('\n')
       const values: Record<string,string> = { evento: label, estabelecimento: tenant.name, detalhes: details }
       const text = rule.template.replace(/\{(evento|estabelecimento|detalhes)\}/g, (_, key) => values[key])

@@ -4,21 +4,23 @@ import { userSession } from '@/lib/auth'
 import { commercialKinds, commercialLabels, defaultCommercialTemplate, leadDefaults, type CommercialKind } from '@/lib/commercial-rules'
 import { RuleEditor } from './rule-editor'
 import { db } from '@/lib/db'
-import { sendInvoiceNotice } from '../actions'
+import { sendCheckoutNotice, sendInvoiceNotice } from '../actions'
 import { Brand, brl, ErrorNote } from '../ui'
 
 export default async function Communication({ searchParams }: { searchParams: Promise<{ erro?: string; enviado?: string }> }) {
   const user = await userSession()
   if (!user?.platformAdmin || !user.adminMfaVerified) redirect('/login')
   const query = await searchParams
-  const [invoices, sends, rules, history] = await Promise.all([
+  const [invoices, sends, rules, history, candidates, plans] = await Promise.all([
     db.billingInvoice.findMany({
       where: { status: 'open', currency: 'brl', tenant: { members: { some: { role: 'ADMIN', disabledAt: null, user: { emailVerifiedAt: { not: null } } } } } },
       orderBy: { issuedAt: 'desc' }, take: 60, include: { tenant: { select: { name: true } } }
     }),
-    db.adminAudit.findMany({ where: { action: 'INVOICE_NOTICE_SENT' }, orderBy: { createdAt: 'desc' }, take: 30 }),
+    db.adminAudit.findMany({ where: { action: { in: ['INVOICE_NOTICE_SENT', 'CHECKOUT_NOTICE_SENT'] } }, orderBy: { createdAt: 'desc' }, take: 30 }),
     db.commercialRule.findMany(),
-    db.commercialNotice.findMany({ orderBy: { sendAt: 'desc' }, take: 40, include: { tenant: { select: { name: true } } } })
+    db.commercialNotice.findMany({ orderBy: { sendAt: 'desc' }, take: 40, include: { tenant: { select: { name: true } } } }),
+    db.tenant.findMany({ where: { active: false, suspended: false, members: { some: { role: 'ADMIN', disabledAt: null, user: { emailVerifiedAt: { not: null } } } } }, select: { id: true, name: true }, orderBy: { name: 'asc' }, take: 100 }),
+    db.plan.findMany({ where: { active: true }, select: { id: true, name: true }, orderBy: { name: 'asc' } })
   ])
   const date = new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short', timeZone: 'America/Sao_Paulo' })
   return <div className="site"><header><Brand /><Link href="/super-admin">Voltar à administração</Link></header><main className="content">
@@ -42,6 +44,15 @@ export default async function Communication({ searchParams }: { searchParams: Pr
           <button>Enviar aviso por e-mail</button>
         </form></li>)}</ul> : <p>Nenhuma fatura elegível para aviso.</p>}
     </article>
-    <article><h2>Envios recentes</h2>{sends.length ? <ul>{sends.map(record => <li key={record.id}>{date.format(record.createdAt)} · Aviso de fatura enviado</li>)}</ul> : <p>Nenhum aviso enviado.</p>}</article>
+    <article><h2>Convidar para contratar um plano</h2>
+      {candidates.length && plans.length ? <form action={sendCheckoutNotice} className="inline">
+        <label>Estabelecimento<select name="tenantId">{candidates.map(tenant => <option key={tenant.id} value={tenant.id}>{tenant.name}</option>)}</select></label>
+        <label>Plano<select name="planId">{plans.map(plan => <option key={plan.id} value={plan.id}>{plan.name}</option>)}</select></label>
+        <label>Ciclo<select name="cycle"><option value="monthly">Mensal</option><option value="annual">Anual</option></select></label>
+        <label className="check"><input name="confirmed" type="checkbox" required /> Confirmo que o envio foi autorizado</label>
+        <button>Enviar link de contratação</button>
+      </form> : <p>Nenhum estabelecimento e plano elegível para convite.</p>}
+    </article>
+    <article><h2>Envios recentes</h2>{sends.length ? <ul>{sends.map(record => <li key={record.id}>{date.format(record.createdAt)} · {record.action === 'CHECKOUT_NOTICE_SENT' ? 'Convite de contratação enviado' : 'Aviso de fatura enviado'}</li>)}</ul> : <p>Nenhum aviso enviado.</p>}</article>
   </main></div>
 }

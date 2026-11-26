@@ -89,6 +89,7 @@ test('duas contratações concorrentes reaproveitam a tentativa, o preço e a ch
   const api = {
     customers: { create: async () => { customerRequests++; return { id: 'cus_' + suffix } } },
     subscriptions: { list: async function* () { yield* [] } },
+    invoices: { list: async () => ({ data: [] }) },
     checkout: { sessions: {
       list: async () => ({ data: [] }),
       create: async (params: { line_items: { price: string }[] }, options: { idempotencyKey: string }) => {

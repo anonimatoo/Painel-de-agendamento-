@@ -14,7 +14,7 @@ import { db } from '@/lib/db'
 import { endSession, hashPassword, membership, startSession, userSession, verifyPassword } from '@/lib/auth'
 import { AgendaError, blockSchedule, book, closeAppointment, dayBounds, localDateTime, rescheduleAppointment } from '@/lib/agenda'
 import { checkStripeConnection, pauseStripePayments, saveStripeConfiguration, stripeForNewPayments } from '@/lib/stripe-settings'
-import { subscriptionCheckout } from '@/lib/billing'
+import { officialCheckoutLink, subscriptionCheckout } from '@/lib/billing'
 import { instanceName, provisionWhatsApp, removeWhatsApp } from '@/lib/whatsapp'
 import { connectWhatsApp, logoutWhatsApp, sendWhatsApp, whatsAppStatus } from '@/lib/evolution'
 import { reconcileOrder, reserveOrder } from '@/lib/orders'
@@ -821,4 +821,43 @@ export async function saveMessageTemplate(form: FormData) {
     })
     return '/whatsapp'
   }, '/whatsapp')
+}
+
+export async function sendCheckoutNotice(form: FormData) {
+  await perform(async () => {
+    const user = await userSession()
+    if (!user?.platformAdmin || !user.adminMfaVerified) return '/login'
+    if (!form.has('confirmed')) throw new AgendaError('Confirme que o envio foi autorizado.')
+    if (!mailConfigured()) throw new AgendaError('Configure o serviço de e-mail antes de enviar.')
+    const values = z.object({ tenantId: id, planId: id, cycle: z.enum(['monthly', 'annual']) }).parse(Object.fromEntries(form))
+    if (!await allowAttempt('checkout-notice', values.tenantId, 5, 3600)) throw new AgendaError('Aguarde antes de enviar outro link.')
+    const tenant = await db.tenant.findFirst({ where: { id: values.tenantId, active: false, suspended: false },
+      include: { members: { where: { role: 'ADMIN', disabledAt: null, user: { emailVerifiedAt: { not: null } } },
+        orderBy: { userId: 'asc' }, take: 1, include: { user: { select: { email: true } } } } }
+    })
+    const email = tenant?.members[0]?.user.email
+    if (!tenant || !email) throw new AgendaError('O estabelecimento não está disponível para contratação ou não tem e-mail confirmado.')
+    const api = await stripeForNewPayments()
+    if (tenant.stripeCustomerId && (await api.invoices.list({ customer: tenant.stripeCustomerId, status: 'open', limit: 1 })).data.length) {
+      throw new AgendaError('Já existe uma fatura em aberto. Envie o aviso da fatura existente.')
+    }
+    const link = officialCheckoutLink(await subscriptionCheckout({ ...values, email, origin: base() }, api))
+    if (!link) throw new AgendaError('Já existe uma assinatura. Oriente o assinante a consultar o portal.')
+    const attempt = await db.billingCheckout.findUnique({ where: { tenantId: tenant.id } })
+    if (!attempt) throw new AgendaError('O Checkout atual precisa ser consultado pelo responsável.')
+    const plan = await db.plan.findFirst({ where: { OR: [{ monthlyPriceId: attempt.priceId }, { annualPriceId: attempt.priceId }] } })
+    if (!plan) throw new AgendaError('Não foi possível confirmar o plano do Checkout.')
+    const annual = plan.annualPriceId === attempt.priceId
+    const valor = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format((annual ? plan.annualCents : plan.monthlyCents) / 100)
+    const date = DateTime.fromJSDate(attempt.expiresAt, { zone: 'America/Sao_Paulo' }).toFormat("dd/LL 'às' HH:mm")
+    const { sendEmail } = await import('@/lib/mail')
+    await sendEmail({ to: email, subject: 'Convite para contratar · CS Agenda Pro', key: 'checkout-notice/' + attempt.id,
+      text: [
+        'Olá,',
+        'O link de contratação do plano ' + plan.name + ' está disponível. Valor ' + (annual ? 'anual' : 'mensal') + ': ' + valor + '. Válido até ' + date + ' (Brasília).',
+        link, 'Equipe CS Agenda Pro'
+      ].join('\n\n') })
+    await db.adminAudit.create({ data: { actorId: user.id, targetId: tenant.id, action: 'CHECKOUT_NOTICE_SENT' } })
+    return '/comunicacao?enviado=1'
+  }, '/comunicacao')
 }

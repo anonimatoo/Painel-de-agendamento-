@@ -21,6 +21,8 @@ export async function subscriptionCheckout(input: { tenantId: string; email: str
     for await (const subscription of api.subscriptions.list({ customer: customerId, status: 'all', limit: 20 })) {
       if (!['canceled', 'incomplete_expired'].includes(subscription.status)) return { customerId }
     }
+    const invoices = await api.invoices.list({ customer: customerId, status: 'open', limit: 1 })
+    if (invoices.data.length) return { customerId }
     const open = await api.checkout.sessions.list({ customer: customerId, status: 'open', limit: 100 })
     const usable = open.data.find(session => session.mode === 'subscription' && session.url)
     if (usable?.url) return { customerId, url: usable.url }
@@ -56,4 +58,18 @@ export async function subscriptionCheckout(input: { tenantId: string; email: str
   }, { idempotencyKey: 'billing:' + attempt.id })
   if (!session.url || session.status !== 'open') throw new AgendaError('O pagamento já foi iniciado. Consulte a situação da assinatura.')
   return session.url
+}
+
+export function officialCheckoutLink(value?: string | null) {
+  const url = value ? URL.parse(value) : null
+  return url?.protocol === 'https:' && url.hostname === 'checkout.stripe.com' && !url.port && !url.username && !url.password ? url.href : undefined
+}
+
+export async function existingCheckoutForNotice(api: Stripe, customer: string) {
+  const [invoices, sessions] = await Promise.all([
+    api.invoices.list({ customer, status: 'open', limit: 1 }),
+    api.checkout.sessions.list({ customer, status: 'open', limit: 20 })
+  ])
+  if (invoices.data.length) return
+  return sessions.data.find(session => session.mode === 'subscription' && session.expires_at * 1000 > Date.now() && officialCheckoutLink(session.url))
 }

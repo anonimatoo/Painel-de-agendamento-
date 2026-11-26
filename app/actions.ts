@@ -14,7 +14,7 @@ import { subscriptionCheckout } from '@/lib/billing'
 import { instanceName, provisionWhatsApp, removeWhatsApp } from '@/lib/whatsapp'
 import { connectWhatsApp, logoutWhatsApp, sendWhatsApp, whatsAppStatus } from '@/lib/evolution'
 import { reconcileOrder, reserveOrder } from '@/lib/orders'
-import { openAppointmentCheckout, reconcileAppointment, refundAppointment, refundOrder } from '@/lib/connect'
+import { changeConnectAvailability, openAppointmentCheckout, reconcileAppointment, refundAppointment, refundOrder } from '@/lib/connect'
 import { stripe } from '@/lib/stripe'
 import { allowAttempt, consumeAccountToken, mailConfigured, sendAccountLink } from '@/lib/account-security'
 import { finishMfaSetup, startMfaSetup, verifyMfa } from '@/lib/mfa'
@@ -458,6 +458,7 @@ export async function reserve(link: string, form: FormData) {
     if (!service) throw new AgendaError('Serviço indisponível.')
     const online = tenant.onlinePayment && service.cents > 0
     const account = tenant.stripeAccountId
+    if (online && tenant.connectPausedAt) throw new AgendaError('O estabelecimento pausou novos pagamentos online. Entre em contato para agendar.')
     if (online && (!account || !(await (await stripeForNewPayments()).accounts.retrieve(account)).charges_enabled)) throw new AgendaError('O pagamento está indisponível no momento.')
     const appointment = await book(tenant, { ...data, consent: form.has('consent'), online, checkoutReturnUrl: base() + path })
     if (!online || !account) return path + '?reserva=' + appointment.id
@@ -494,7 +495,7 @@ export async function shopCheckout(link: string, form: FormData) {
   await perform(async () => {
     const values = z.object({ name: title, phone, requestId: z.uuid() }).parse(Object.fromEntries(form))
     const tenant = await db.tenant.findFirst({ where: { slug: link, active: true, suspended: false, stripeAccountId: { not: null } } })
-    if (!tenant?.stripeAccountId) throw new AgendaError('Compras online indisponíveis.')
+    if (!tenant?.stripeAccountId || tenant.connectPausedAt) throw new AgendaError('Compras online indisponíveis.')
     const account = tenant.stripeAccountId
     const api = await stripeForNewPayments()
     if (!(await api.accounts.retrieve(account)).charges_enabled) throw new AgendaError('Compras online indisponíveis.')
@@ -672,4 +673,21 @@ export async function sendInvoiceNotice(form: FormData) {
     await db.adminAudit.create({ data: { actorId: user.id, targetId: invoiceId, action: 'INVOICE_NOTICE_SENT' } })
     return '/comunicacao?enviado=1'
   }, '/comunicacao')
+}
+
+export async function manageConnectAvailability(form: FormData) {
+  await perform(async () => {
+    const user = await userSession()
+    const member = user ? await membership(user.id) : null
+    if (!user || !member || member.role !== 'ADMIN' || !member.tenant.active || member.tenant.suspended) return '/dashboard'
+    const pause = z.enum(['pause', 'resume']).parse(form.get('operation')) === 'pause'
+    if (!pause) {
+      const account = member.tenant.stripeAccountId
+      if (!account || !(await (await stripeForNewPayments()).accounts.retrieve(account)).charges_enabled) {
+        throw new AgendaError('Atualize seu cadastro na Stripe antes de retomar os recebimentos.')
+      }
+    }
+    await changeConnectAvailability(member.tenantId, user.id, pause)
+    return '/recebimentos'
+  }, '/recebimentos')
 }

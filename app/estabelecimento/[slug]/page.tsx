@@ -40,7 +40,7 @@ export default async function Establishment({ params, searchParams }: {
   }) : null
   const order = typeof query.pedido === 'string' && query.pedido.length < 100
     ? await db.shopOrder.findFirst({ where: { id: query.pedido, tenantId: tenant.id }, select: { status: true, paymentReview: true } }) : null
-  const purchasable = tenant.stripeAccountId && tenant.products.some(product => (product.promotionCents ?? product.cents) > 0)
+  const purchasable = !tenant.connectPausedAt && tenant.stripeAccountId && tenant.products.some(product => (product.promotionCents ?? product.cents) > 0)
   const today = DateTime.now().setZone(tenant.timezone).toISODate()!
   const day = query.dia ?? today
   const chosen = tenant.services.find(s => s.id === query.servico) ?? tenant.services[0]

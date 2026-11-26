@@ -109,3 +109,27 @@ export async function refundOrder(tenantId: string, orderId: string) {
   if (refund.status === 'succeeded') await db.$transaction(tx => settleOrderRefund(tx, account, refund))
   else if (refund.status !== 'pending' && refund.status !== 'requires_action') throw new AgendaError('O estorno não foi aprovado.')
 }
+
+export async function changeConnectAvailability(tenantId: string, actorId: string, pause: boolean) {
+  return db.$transaction(async tx => {
+    const tenant = await tx.tenant.findUnique({
+      where: { id: tenantId }, select: { stripeAccountId: true, connectPausedAt: true }
+    })
+    if (!tenant?.stripeAccountId) throw new AgendaError('Nenhuma conta de recebimentos foi conectada.')
+    const changed = await tx.tenant.updateMany({
+      where: { id: tenantId, stripeAccountId: tenant.stripeAccountId, connectPausedAt: tenant.connectPausedAt },
+      data: { connectPausedAt: pause ? new Date() : null }
+    })
+    if (changed.count) await tx.teamEvent.create({
+      data: { tenantId, actorId, subject: 'Recebimentos Stripe', action: pause ? 'CONNECT_PAUSED' : 'CONNECT_RESUMED' }
+    })
+  })
+}
+
+export async function connectObligations(tenantId: string) {
+  const [appointments, orders] = await Promise.all([
+    db.appointment.count({ where: { tenantId, OR: [{ status: 'PENDING' }, { checkoutState: 'REVIEW' }] } }),
+    db.shopOrder.count({ where: { tenantId, OR: [{ status: 'PENDING' }, { paymentReview: true }] } })
+  ])
+  return { appointments, orders }
+}

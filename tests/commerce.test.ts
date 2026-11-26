@@ -54,3 +54,33 @@ test('reservas de carrinho concorrem por estoque e expiração libera uma vez', 
     await db.tenant.delete({ where: { id: tenant.id } })
   }
 })
+
+test('pausa Connect isola novos pedidos e preserva a conta para conciliação', async () => {
+  const { changeConnectAvailability } = await import('../lib/connect')
+  const { reserveOrder } = await import('../lib/orders')
+  const tenants = await Promise.all(['Primeiro', 'Segundo'].map(name => db.tenant.create({
+    data: { name, slug: randomUUID(), stripeAccountId: 'acct_' + randomUUID() }
+  })))
+  const ids = tenants.map(tenant => tenant.id)
+  try {
+    const products = await Promise.all(tenants.map(tenant => db.product.create({
+      data: { tenantId: tenant.id, name: 'Produto', cents: 1500, stock: 2 }
+    })))
+    const reserve = (index: number) => reserveOrder({
+      tenantId: tenants[index].id, requestId: randomUUID(), name: 'Cliente', phone: '5511999999999',
+      cart: [{ productId: products[index].id, quantity: 1 }]
+    })
+    const prior = await reserve(0)
+    await changeConnectAvailability(ids[0], 'admin', true)
+    await assert.rejects(reserve(0), /indisponíveis/)
+    await reserve(1)
+    assert.equal((await db.shopOrder.findUniqueOrThrow({ where: { id: prior.id } })).status, 'PENDING')
+    assert.equal((await db.tenant.findUniqueOrThrow({ where: { id: ids[0] } })).stripeAccountId, tenants[0].stripeAccountId)
+    await changeConnectAvailability(ids[0], 'admin', false)
+    await reserve(0)
+  } finally {
+    await db.shopOrder.deleteMany({ where: { tenantId: { in: ids } } })
+    await db.product.deleteMany({ where: { tenantId: { in: ids } } })
+    await db.tenant.deleteMany({ where: { id: { in: ids } } })
+  }
+})

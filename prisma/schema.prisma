@@ -59,6 +59,7 @@ model Tenant {
   billingSyncAt DateTime?
   billingInvoices BillingInvoice[]
   stripeAccountId String? @unique
+  connectPausedAt DateTime?
   onlinePayment Boolean @default(false)
   depositPercent Int @default(100)
   platformFeeBps Int?

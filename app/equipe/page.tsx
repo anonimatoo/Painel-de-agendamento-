@@ -7,7 +7,7 @@ import { Brand, ErrorNote } from '../ui'
 import { InviteForm } from './invite'
 
 const roles: Record<string, string> = { ADMIN: 'Administrador', MANAGER: 'Gerência', RECEPTION: 'Recepção', PROFESSIONAL: 'Profissional' }
-const actions: Record<string, string> = { INVITED: 'Convite criado', JOINED: 'Convite aceito', DISABLED: 'Acesso desativado', ENABLED: 'Acesso reativado', SESSIONS_REVOKED: 'Sessões encerradas' }
+const actions: Record<string, string> = { INVITED: 'Convite criado', JOINED: 'Convite aceito', DISABLED: 'Acesso desativado', ENABLED: 'Acesso reativado', SESSIONS_REVOKED: 'Sessões encerradas', CONNECT_PAUSED: 'Recebimentos pausados', CONNECT_RESUMED: 'Recebimentos retomados' }
 
 export default async function Team({ searchParams }: { searchParams: Promise<{ erro?: string }> }) {
   const user = await userSession()

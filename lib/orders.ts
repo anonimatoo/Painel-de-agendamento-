@@ -18,6 +18,8 @@ export async function reserveOrder(input: { tenantId: string; requestId: string;
         existing.items.some(item => requested.get(item.productId) !== item.quantity)) throw new AgendaError('Atualize a página antes de iniciar um novo pedido.')
       return existing
     }
+    const tenant = await tx.tenant.findUniqueOrThrow({ where: { id: tenantId }, select: { connectPausedAt: true } })
+    if (tenant.connectPausedAt) throw new AgendaError('Os pagamentos online estão indisponíveis.')
     const items = []
     for (const line of [...cart].sort((first, second) => first.productId.localeCompare(second.productId))) {
       const { productId, quantity } = line

@@ -48,6 +48,11 @@ export async function book(tenant: Tenant, data: { serviceId: string; profession
   const day = DateTime.fromISO(data.startsAt, { zone: tenant.timezone }).toISODate()
   if (!day) throw new AgendaError('Selecione um horário válido.')
   return db.$transaction(async tx => {
+    if (data.online) {
+      const [current] = await tx.$queryRaw<{ stripeAccountId: string | null; connectPausedAt: Date | null }[]>`
+        SELECT "stripeAccountId", "connectPausedAt" FROM "Tenant" WHERE id = ${tenant.id} FOR UPDATE`
+      if (!current || current.connectPausedAt || current.stripeAccountId !== tenant.stripeAccountId) throw new AgendaError('Os pagamentos online estão indisponíveis.')
+    }
     await lockProfessional(tx, tenant.id, data.professionalId)
     const slots = await availability(tenant, data.serviceId, data.professionalId, day, tx)
     const slot = slots.find(s => s.start === new Date(data.startsAt).toISOString())

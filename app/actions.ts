@@ -580,12 +580,13 @@ export async function saveWhatsAppPreferences(form: FormData) {
     const values = z.object({
       reminderMinutes: z.coerce.number().int().min(0).max(10080),
       reminderTemplate: z.string().trim().max(500),
+      returnAfterDays: z.coerce.number().int().min(0).max(365).default(0),
       reviewUrl: z.union([z.literal(''), z.url({ protocol: /^https$/ }).max(300)])
     }).parse(Object.fromEntries(form))
     const reminderPresets = [...new Set(z.array(z.enum(['120', '1440', '2880'])).parse(form.getAll('presets')).map(Number))]
     const tenant = await db.tenant.update({
       where: { id: member.tenantId },
-      data: { reminderMinutes: values.reminderMinutes || null, reminderTemplate: values.reminderTemplate || null, statusMessages: form.has('statusMessages'), reminderPresets, completionMessages: form.has('completionMessages'), reviewUrl: values.reviewUrl || null }
+      data: { birthdayMessages: form.has('birthdayMessages'), returnAfterDays: values.returnAfterDays || null, reminderMinutes: values.reminderMinutes || null, reminderTemplate: values.reminderTemplate || null, statusMessages: form.has('statusMessages'), reminderPresets, completionMessages: form.has('completionMessages'), reviewUrl: values.reviewUrl || null }
     })
     if (!tenant.reminderMinutes && !tenant.reminderPresets.length) return '/whatsapp'
     const appointments = await db.appointment.findMany({ where: {
@@ -765,4 +766,39 @@ export async function saveEvolutionSettings(form: FormData) {
     }
     return '/diagnostico'
   }, '/diagnostico')
+}
+
+export async function customerPreferences(form: FormData) {
+  await perform(async () => {
+    const user = await userSession()
+    const member = user ? await membership(user.id) : null
+    if (!member || !can(member, 'customer.edit') || !member.tenant.active || member.tenant.suspended) return '/dashboard'
+    const values = z.object({ id, name: title, birthday: z.union([z.literal(''), z.iso.date()]) }).parse(Object.fromEntries(form))
+    await db.customer.updateMany({
+      where: { id: values.id, tenantId: member.tenantId },
+      data: { name: values.name, birthMonthDay: values.birthday ? values.birthday.slice(5) : null,
+        followupConsentAt: form.has('followupConsent') ? new Date() : null }
+    })
+    return '/dashboard'
+  }, '/dashboard')
+}
+
+export async function saveMessageTemplate(form: FormData) {
+  await perform(async () => {
+    const user = await userSession()
+    const member = user ? await membership(user.id) : null
+    if (!member || !can(member, 'whatsapp.manage') || !member.tenant.active || member.tenant.suspended) return '/dashboard'
+    const { messageTemplates } = await import('@/lib/whatsapp-template')
+    const kind = z.string().parse(form.get('kind'))
+    if (!Object.hasOwn(messageTemplates, kind)) throw new AgendaError('Selecione um tipo de mensagem válido.')
+    const text = z.string().trim().max(500).parse(form.get('template'))
+    await db.$transaction(async tx => {
+      await tx.$queryRaw`SELECT id FROM "Tenant" WHERE id = ${member.tenantId} FOR UPDATE`
+      const latest = await tx.tenant.findUniqueOrThrow({ where: { id: member.tenantId }, select: { whatsappTemplates: true } })
+      await tx.tenant.update({ where: { id: member.tenantId }, data: {
+        whatsappTemplates: { ...(latest.whatsappTemplates as Record<string, string> | null), [kind]: text }
+      } })
+    })
+    return '/whatsapp'
+  }, '/whatsapp')
 }

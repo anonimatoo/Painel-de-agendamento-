@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { DateTime } from 'luxon'
 import { Prisma, Tenant } from '@prisma/client'
+import { scheduleReturn } from './whatsapp-followup'
 import { calculateCommission, platformFee } from './commission'
 import { db } from './db'
 
@@ -178,11 +179,12 @@ export async function closeAppointment(tenantId: string, id: string, status: 'CO
     if (!updated.count) throw new AgendaError('Não foi possível atualizar esse atendimento.')
     await tx.appointmentHistory.create({ data: { appointmentId: id, actorId, operation: status } })
     if (status === 'COMPLETED') {
-      const appointment = await tx.appointment.findUniqueOrThrow({ where: { id }, include: { professional: true, tenant: true } })
+      const appointment = await tx.appointment.findUniqueOrThrow({ where: { id }, include: { professional: true, tenant: true, customer: true } })
       const cents = calculateCommission(appointment.cents, appointment.professional.commissionBps, appointment.professional.commissionFixed)
       if (cents) await tx.professionalCommission.create({ data: { appointmentId: id, cents } })
       await enqueueStatus(tx, appointment.tenant, appointment, 'COMPLETED')
       await enqueueStatus(tx, appointment.tenant, appointment, 'FEEDBACK')
+      await scheduleReturn(tx, appointment)
     }
     if (status === 'CANCELED') {
       const appointment = await tx.appointment.findUniqueOrThrow({ where: { id }, include: { tenant: true } })

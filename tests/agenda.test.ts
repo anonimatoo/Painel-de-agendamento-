@@ -138,6 +138,19 @@ test('bloqueios concorrem com reservas e reagendamento preserva histórico', asy
     })
     await closeAppointment(tenant.id, appointment.id, 'COMPLETED', 'tester')
     assert.equal((await db.professionalCommission.findUniqueOrThrow({ where: { appointmentId: appointment.id } })).cents, 625)
+    const { scheduleBirthdays, scheduleReturn } = await import('../lib/whatsapp-followup')
+    const current = new Date()
+    await db.tenant.update({ where: { id: tenant.id }, data: { birthdayMessages: true, whatsappInstance: 'fixture-' + tenant.id, returnAfterDays: 30 } })
+    await db.customer.update({ where: { id: appointment.customerId }, data: {
+      birthMonthDay: DateTime.fromJSDate(current, { zone: tenant.timezone }).toFormat('LL-dd'),
+      followupConsentAt: current
+    } })
+    await Promise.all([scheduleBirthdays(current), scheduleBirthdays(current)])
+    assert.equal(await db.reminder.count({ where: { appointmentId: appointment.id, kind: 'BIRTHDAY' } }), 1)
+    const completed = await db.appointment.findUniqueOrThrow({ where: { id: appointment.id }, include: { tenant: true, customer: true } })
+    await db.$transaction(tx => scheduleReturn(tx, completed))
+    assert.equal(await db.reminder.count({ where: { appointmentId: appointment.id, kind: 'RETURN' } }), 1)
+
 
 
   } finally {

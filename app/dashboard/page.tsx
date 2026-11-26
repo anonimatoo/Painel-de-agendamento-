@@ -7,7 +7,7 @@ import { connectStatus } from '@/lib/connect'
 import { db } from '@/lib/db'
 import { membership, userSession } from '@/lib/auth'
 import { WhatsAppControls } from '../whatsapp-controls'
-import { logout, manage } from '../actions'
+import { customerPreferences, logout, manage } from '../actions'
 import { Brand, ErrorNote, Field, brl } from '../ui'
 
 const labels = { CONFIRMED: 'Confirmado', PENDING: 'Aguardando pagamento', CANCELED: 'Cancelado', NO_SHOW: 'Faltou', COMPLETED: 'Concluído' }
@@ -81,7 +81,15 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
         </article>
         <article><h2>Clientes</h2>
           <form className="inline" action={manage.bind(null, 'customer')}><Field label="Nome" name="name" /><Field label="Telefone com DDI" name="phone" type="tel" /><button>Adicionar cliente</button></form>
-          {customers.length > 0 && <ul>{customers.map(c => <li key={c.id}>{c.name} · +{c.phone}</li>)}</ul>}
+          {customers.length > 0 && <ul>{customers.map(c => <li key={c.id}>{c.name} · +{c.phone}
+            {can(member, 'customer.edit') && <details><summary>Editar cadastro e preferências</summary>
+              <form action={customerPreferences} className="inline"><input type="hidden" name="id" value={c.id} />
+                <Field label="Nome" name="name" value={c.name} />
+                <Field label="Aniversário (somente dia e mês serão guardados)" name="birthday" type="date" required={false} value={c.birthMonthDay ? '2000-' + c.birthMonthDay : ''} />
+                <label className="check"><input name="followupConsent" type="checkbox" defaultChecked={Boolean(c.followupConsentAt)} /> Cliente autorizou WhatsApp de aniversário ou retorno</label>
+                <button>Salvar preferências do cliente</button>
+              </form>
+            </details>}</li>)}</ul>}
         </article>
       </>}
       {enabled && manager && <section className="grid" id="equipe">

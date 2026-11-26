@@ -18,7 +18,7 @@ import { officialCheckoutLink, subscriptionCheckout } from '@/lib/billing'
 import { instanceName, provisionWhatsApp, removeWhatsApp } from '@/lib/whatsapp'
 import { connectWhatsApp, logoutWhatsApp, sendWhatsApp, whatsAppStatus } from '@/lib/evolution'
 import { reconcileOrder, reserveOrder } from '@/lib/orders'
-import { changeConnectAvailability, openAppointmentCheckout, reconcileAppointment, refundAppointment, refundOrder } from '@/lib/connect'
+import { changeConnectAvailability, connectStatus, startConnectOnboarding, openAppointmentCheckout, reconcileAppointment, refundAppointment, refundOrder } from '@/lib/connect'
 import { stripe } from '@/lib/stripe'
 import { allowAttempt, consumeAccountToken, mailConfigured, sendAccountLink } from '@/lib/account-security'
 import { finishMfaSetup, startMfaSetup, verifyMfa } from '@/lib/mfa'
@@ -193,7 +193,7 @@ export async function manage(operation: string, form: FormData) {
           break
         }
         const onlinePayment = form.has('onlinePayment')
-        if (onlinePayment && (!tenant.stripeAccountId || !(await (await stripe()).accounts.retrieve(tenant.stripeAccountId)).charges_enabled)) {
+        if (onlinePayment && (!tenant.stripeAccountId || !(await connectStatus(tenant.stripeAccountId)).payments)) {
           throw new AgendaError('Conclua a configuração da conta para aceitar pagamentos.')
         }
         await db.tenant.update({ where: { id: tenantId }, data: {
@@ -267,16 +267,7 @@ export async function manage(operation: string, form: FormData) {
       }
       case 'connect': {
         if (member.role !== 'ADMIN') throw new AgendaError('Seu acesso não permite esta operação.')
-        const api = await stripeForNewPayments()
-        const account = tenant.stripeAccountId ?? (await api.accounts.create({
-          country: 'BR', type: 'express', email: user.email,
-          capabilities: { card_payments: { requested: true }, transfers: { requested: true } }
-        }, { idempotencyKey: 'connect:' + tenantId })).id
-        await db.tenant.update({ where: { id: tenantId }, data: { stripeAccountId: account } })
-        const link = await api.accountLinks.create({
-          account, type: 'account_onboarding', refresh_url: base() + '/dashboard', return_url: base() + '/dashboard'
-        })
-        return link.url
+        return startConnectOnboarding(tenantId, user.email, base())
       }
       default:
         throw new AgendaError('Operação indisponível.')
@@ -500,7 +491,7 @@ export async function reserve(link: string, form: FormData) {
     const online = tenant.onlinePayment && service.cents > 0
     const account = tenant.stripeAccountId
     if (online && tenant.connectPausedAt) throw new AgendaError('O estabelecimento pausou novos pagamentos online. Entre em contato para agendar.')
-    if (online && (!account || !(await (await stripeForNewPayments()).accounts.retrieve(account)).charges_enabled)) throw new AgendaError('O pagamento está indisponível no momento.')
+    if (online && (!account || !(await connectStatus(account, await stripeForNewPayments())).payments)) throw new AgendaError('O pagamento está indisponível no momento.')
     const appointment = await book(tenant, { ...data, consent: form.has('consent'), online, checkoutReturnUrl: base() + path })
     if (!online || !account) return path + '?reserva=' + appointment.id
     const session = await openAppointmentCheckout(appointment).catch(() => null)
@@ -539,7 +530,7 @@ export async function shopCheckout(link: string, form: FormData) {
     if (!tenant?.stripeAccountId || tenant.connectPausedAt) throw new AgendaError('Compras online indisponíveis.')
     const account = tenant.stripeAccountId
     const api = await stripeForNewPayments()
-    if (!(await api.accounts.retrieve(account)).charges_enabled) throw new AgendaError('Compras online indisponíveis.')
+    if (!(await connectStatus(account, api)).payments) throw new AgendaError('Compras online indisponíveis.')
     if (!(await allowAttempt('shop-checkout', tenant.id + ':' + values.phone, 6, 1800))) throw new AgendaError('Aguarde antes de iniciar outro pedido.')
     const count = z.coerce.number().int().min(0).max(100)
     const cart = [...form.entries()].filter(([key]) => key.startsWith('product:')).map(([key, value]) => ({
@@ -725,7 +716,7 @@ export async function manageConnectAvailability(form: FormData) {
     const pause = z.enum(['pause', 'resume']).parse(form.get('operation')) === 'pause'
     if (!pause) {
       const account = member.tenant.stripeAccountId
-      if (!account || !(await (await stripeForNewPayments()).accounts.retrieve(account)).charges_enabled) {
+      if (!account || !(await connectStatus(account, await stripeForNewPayments())).payments) {
         throw new AgendaError('Atualize seu cadastro na Stripe antes de retomar os recebimentos.')
       }
     }

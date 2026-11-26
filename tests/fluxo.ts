@@ -90,9 +90,20 @@ async function main() {
   cookie = login.headers.get('set-cookie')?.split(';')[0] ?? ''
   assert.match(await (await get('/dashboard')).text(), /Cliente de teste/)
   assert.equal((await get('/super-admin')).headers.get('location'), '/login')
+  const refresh = '/api/stripe/connect/refresh?estabelecimento='
+  const other = await db.tenant.create({ data: { slug: randomUUID(), name: 'Outro estabelecimento', active: true, stripeAccountId: 'acct_' + randomUUID().replaceAll('-', '') } })
+  try {
+    assert.equal((await get(refresh + other.id)).status, 403)
+    assert.equal((await get(refresh + tenant.id)).status, 403)
+  } finally {
+    await db.tenant.delete({ where: { id: other.id } })
+  }
   await submit('/dashboard', 'Sair', {})
   assert.equal((await get('/dashboard')).headers.get('location'), '/login')
-  console.log('Fluxo de cadastro, sessão, agenda e reserva aprovado.')
+  const anonymous = await get(refresh + tenant.id)
+  assert.equal(anonymous.status, 303)
+  assert.equal(anonymous.headers.get('location'), new URL('/login', origin).href)
+  console.log('Fluxo de cadastro, sessão, agenda, reserva e isolamento da renovação Connect aprovado.')
 }
 
 async function cleanup() {

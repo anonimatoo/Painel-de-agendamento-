@@ -2,12 +2,59 @@ import { db } from './db'
 import { settleOrderRefund } from './orders'
 import { settleAppointment, stripe } from './stripe'
 import { AgendaError } from './agenda'
+import { createConnectAccount, createConnectOnboardingLink, readConnectStatus } from './connect-accounts'
+import { stripeClient, stripeConfiguration } from './stripe-settings'
 import type { Appointment } from '@prisma/client'
 import type Stripe from 'stripe'
 
-export async function connectStatus(accountId: string) {
-  const account = await (await stripe()).accounts.retrieve(accountId)
-  return { payments: account.charges_enabled, payouts: account.payouts_enabled, submitted: account.details_submitted }
+export async function connectStatus(accountId: string, api?: Stripe) {
+  return readConnectStatus(api ?? await stripe(), accountId)
+}
+
+export async function startConnectOnboarding(
+  tenantId: string,
+  email: string,
+  origin: string,
+  clientFactory: typeof stripeClient = stripeClient
+) {
+  const attempt = await db.$transaction(async tx => {
+    // Coordinate with credential rotation before reserving the Stripe operation.
+    await tx.$queryRaw`SELECT 1 AS locked FROM (SELECT pg_advisory_xact_lock(73520451)) AS lock`
+    const tenant = await tx.tenant.findUniqueOrThrow({ where: { id: tenantId } })
+    const config = await stripeConfiguration(tx)
+    if (config.paused) throw new AgendaError('Novas cobranças estão temporariamente indisponíveis.')
+    const api = clientFactory(config.secret)
+    if (tenant.stripeAccountId) return { api, accountId: tenant.stripeAccountId }
+
+    const scope = config.mode + ':' + (await api.accounts.retrieve()).id
+    const startedAt = tenant.connectAttemptAt ?? new Date()
+    const contactEmail = tenant.connectAttemptEmail ?? email
+
+    // Stripe can replay v2 POST requests for 30 days. Stop before the replay window expires.
+    if (tenant.connectAttemptAt && (tenant.connectAttemptScope !== scope ||
+        Date.now() - +startedAt >= 29 * 24 * 60 * 60_000)) {
+      throw new AgendaError('A criação da conta Stripe precisa de conciliação pelo suporte.')
+    }
+    if (!tenant.connectAttemptAt) await tx.tenant.update({
+      where: { id: tenantId },
+      data: { connectAttemptAt: startedAt, connectAttemptEmail: contactEmail, connectAttemptScope: scope }
+    })
+    return { api, accountId: null, contactEmail, startedAt, scope }
+  }, { timeout: 20_000 })
+
+  const { api } = attempt
+  if (attempt.accountId !== null) return createConnectOnboardingLink(api, attempt.accountId, tenantId, origin)
+
+  const accountId = await createConnectAccount(api, tenantId, attempt.contactEmail)
+  const attached = await db.tenant.updateMany({
+    where: { id: tenantId, stripeAccountId: null, connectAttemptAt: attempt.startedAt, connectAttemptScope: attempt.scope },
+    data: { stripeAccountId: accountId, connectAttemptAt: null, connectAttemptEmail: null, connectAttemptScope: null }
+  })
+  if (!attached.count) {
+    const current = await db.tenant.findUnique({ where: { id: tenantId }, select: { stripeAccountId: true } })
+    if (current?.stripeAccountId !== accountId) throw new AgendaError('A conta Stripe vinculada foi alterada. Consulte o suporte.')
+  }
+  return createConnectOnboardingLink(api, accountId, tenantId, origin)
 }
 
 export async function refundAppointment(tenantId: string, appointmentId: string) {

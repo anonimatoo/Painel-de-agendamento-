@@ -63,6 +63,9 @@ model Tenant {
   billingInvoices BillingInvoice[]
   commercialNotices CommercialNotice[]
   stripeAccountId String? @unique
+  connectAttemptAt DateTime?
+  connectAttemptEmail String?
+  connectAttemptScope String?
   connectPausedAt DateTime?
   onlinePayment Boolean @default(false)
   depositPercent Int @default(100)

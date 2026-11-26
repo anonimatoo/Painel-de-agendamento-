@@ -13,7 +13,7 @@ export async function POST(req: Request, context: { params: Promise<{ source: st
   }
   const client = stripeClient(settings.secret)
   const event = verifyStripeEvent(client, await req.text(), signature, settings, source)
-  if (!event) return new Response(null, { status: 400 })
+  if (event?.object !== 'event' || !event.data?.object) return new Response(null, { status: 400 })
   try {
     await applyEvent(event, client)
     return Response.json({ received: true })

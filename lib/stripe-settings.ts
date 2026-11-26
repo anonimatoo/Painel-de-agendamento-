@@ -1,4 +1,5 @@
 import Stripe from 'stripe'
+import type { Prisma } from '@prisma/client'
 import { db } from './db'
 import { seal, unseal } from './secrets'
 import { AgendaError } from './agenda'
@@ -10,8 +11,8 @@ export function stripeClient(secret: string) {
   return new Stripe(secret, { maxNetworkRetries: 2, timeout: 8_000 })
 }
 
-export async function stripeConfiguration() {
-  const configuration = await db.stripeSettings.findUnique({ where: { id: 1 } })
+export async function stripeConfiguration(connection: Pick<Prisma.TransactionClient, 'stripeSettings'> = db) {
+  const configuration = await connection.stripeSettings.findUnique({ where: { id: 1 } })
   if (configuration) {
     return {
       ...JSON.parse(unseal(configuration.encrypted, 'stripe:' + configuration.accountId + ':' + configuration.mode)) as Credentials,
@@ -39,7 +40,7 @@ export async function saveStripeConfiguration(actorId: string, mode: 'test' | 'l
     await tx.$queryRaw`SELECT 1 AS locked FROM (SELECT pg_advisory_xact_lock(73520451)) AS lock`
     const previous = await tx.stripeSettings.findUnique({ where: { id: 1 } })
     const [tenants, plans, journal] = await Promise.all([
-      tx.tenant.count({ where: { OR: [{ stripeCustomerId: { not: null } }, { stripeAccountId: { not: null } }] } }),
+      tx.tenant.count({ where: { OR: [{ stripeCustomerId: { not: null } }, { stripeAccountId: { not: null } }, { connectAttemptAt: { not: null } }] } }),
       tx.plan.count(),
       tx.stripeMovement.count()
     ])

@@ -16,7 +16,11 @@ async function main() {
       assert.equal(response.status, 200)
     }
     assert.equal(await db.webhookEvent.count({ where: { id } }), 1)
-    console.log('O webhook local aceitou a assinatura de teste e registrou um único evento.')
+    const thin = JSON.stringify({ id, object: 'v2.core.event', livemode: false, type: 'v2.core.account.created' })
+    const thinSignature = Stripe.webhooks.generateTestHeaderString({ payload: thin, secret })
+    const rejected = await fetch(url, { method: 'POST', headers: { 'stripe-signature': thinSignature }, body: thin })
+    assert.equal(rejected.status, 400)
+    console.log('O endpoint snapshot deduplicou o evento assinado e rejeitou o evento thin.')
   } finally {
     await db.webhookEvent.deleteMany({ where: { id } })
     await db.$disconnect()

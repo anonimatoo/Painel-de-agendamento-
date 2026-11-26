@@ -26,6 +26,7 @@ export default async function Receipts({ searchParams }: { searchParams: Promise
     <article><h2>Conta de recebimentos</h2>
       <p>{!tenant.stripeAccountId ? 'Nenhuma conta conectada.' : !status ? 'Situação indisponível no momento.' :
         (status.submitted ? 'Cadastro enviado' : 'Cadastro incompleto') + ' · ' + (status.payments ? 'Recebimentos habilitados' : 'Recebimentos indisponíveis') + ' · ' + (status.payouts ? 'Repasses habilitados' : 'Repasses indisponíveis')}</p>
+      {(status?.requirements === 'currently_due' || status?.requirements === 'past_due') && <p>Há informações cadastrais pendentes na Stripe.</p>}
       {member.role === 'ADMIN' && tenant.active && !tenant.suspended && <form action={manage.bind(null, 'connect')}>
         <button>{tenant.stripeAccountId ? 'Continuar ou atualizar cadastro' : 'Conectar minha conta Stripe'}</button>
       </form>}

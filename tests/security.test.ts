@@ -113,3 +113,12 @@ test('permissões individuais revogam sessões e bloqueiam escalada entre funcio
     await db.user.deleteMany({ where: { id: { in: [owner.id, staff.id] } } })
   }
 })
+
+test('alteração do endereço Evolution se limita aos destinos configurados', async () => {
+  const { authorizedEvolutionUrl } = await import('../lib/evolution-settings')
+  const pinned = 'https://mensagens.example.test/api'
+  assert.equal(authorizedEvolutionUrl(pinned + '/', pinned), pinned)
+  assert.throws(() => authorizedEvolutionUrl('https://outro.example.test/api', pinned))
+  assert.throws(() => authorizedEvolutionUrl(pinned + '?query=1', pinned))
+  assert.throws(() => authorizedEvolutionUrl('ftp://mensagens.example.test/api', pinned))
+})

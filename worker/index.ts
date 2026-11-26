@@ -61,6 +61,8 @@ const worker = new Worker('agenda-reminders', async job => {
 }, { connection })
 
 async function publishReminders() {
+  await queue.getWaitingCount()
+  await db.workerHeartbeat.upsert({ where: { id: 1 }, create: { id: 1, seenAt: new Date() }, update: { seenAt: new Date() } })
   const now = new Date()
   await recoverDelivery(now)
   const due = await db.reminder.findMany({

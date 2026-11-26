@@ -1,9 +1,9 @@
+import { evolutionConfiguration } from './evolution-settings'
 import { DeliveryRejected } from './delivery'
 import { z } from 'zod'
 
 async function evolution(path: string, method: 'GET' | 'POST' | 'DELETE', body?: object) {
-  const origin = process.env.EVOLUTION_URL
-  const key = process.env.EVOLUTION_API_KEY
+  const { origin, key } = await evolutionConfiguration()
   if (!origin || !key) throw new Error('Evolution configuration missing')
   const base = new URL(origin.replace(/\/$/, '') + '/')
   if (!['https:', 'http:'].includes(base.protocol) || base.username || base.password || base.search || base.hash) {

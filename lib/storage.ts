@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3'
+import { HeadBucketCommand, DeleteObjectCommand, GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3'
 import type { MediaKind } from '@prisma/client'
 import { db } from './db'
 import sharp from 'sharp'
@@ -93,4 +93,13 @@ export async function readCover(key: string) {
   const { client, bucket } = storage()
   const response = await client.send(new GetObjectCommand({ Bucket: bucket, Key: key }))
   return response.Body?.transformToWebStream()
+}
+
+export async function checkStorage() {
+  const { client, bucket } = storage()
+  try {
+    await client.send(new HeadBucketCommand({ Bucket: bucket }), { abortSignal: AbortSignal.timeout(6000) })
+  } finally {
+    client.destroy()
+  }
 }

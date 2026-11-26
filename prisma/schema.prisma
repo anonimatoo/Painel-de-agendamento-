@@ -527,3 +527,16 @@ model CommercialNotice {
   @@unique([tenantId, kind, reference])
   @@index([state, sendAt])
 }
+
+model EvolutionSetting {
+  id Int @id
+  endpoint String
+  encryptedKey String
+  qrEnabled Boolean @default(false)
+  checkedAt DateTime
+}
+
+model WorkerHeartbeat {
+  id Int @id
+  seenAt DateTime
+}

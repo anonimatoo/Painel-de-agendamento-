@@ -1,3 +1,4 @@
+import { evolutionConfiguration } from './evolution-settings'
 import { createHash } from 'node:crypto'
 import { db } from './db'
 import { createWhatsAppInstance, deleteWhatsAppInstance, whatsAppStatus } from './evolution'
@@ -12,7 +13,7 @@ export async function provisionWhatsApp(tenantId: string) {
     await tx.$queryRaw`SELECT id FROM "Tenant" WHERE id = ${tenantId} FOR UPDATE`
     const tenant = await tx.tenant.findUniqueOrThrow({ where: { id: tenantId } })
     if (tenant.whatsappInstance) return tenant.whatsappInstance
-    if (process.env.EVOLUTION_QR_PROVISIONING !== 'true') {
+    if (!(await evolutionConfiguration()).qrEnabled) {
       throw new AgendaError('A conexão por QR Code ainda não está disponível. Solicite a ativação do WhatsApp ao suporte.')
     }
     const instance = instanceName(tenantId)

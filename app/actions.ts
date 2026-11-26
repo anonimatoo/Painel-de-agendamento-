@@ -749,3 +749,20 @@ export async function teamPermissions(form: FormData) {
     return '/equipe'
   }, '/equipe')
 }
+
+export async function saveEvolutionSettings(form: FormData) {
+  await perform(async () => {
+    const user = await userSession()
+    if (!user?.platformAdmin || !user.adminMfaVerified) return '/login'
+    const password = credentials.shape.password.parse(form.get('password'))
+    if (!await allowAttempt('evolution-settings', user.id, 6, 600) || !await verifyPassword(password, user.password)) {
+      throw new AgendaError('Não foi possível confirmar sua senha.')
+    }
+    const values = z.object({ origin: z.string().max(300).url(), key: z.string().trim().min(8).max(500) }).parse(Object.fromEntries(form))
+    const { saveEvolution } = await import('@/lib/evolution-settings')
+    try { await saveEvolution(user.id, values.origin, values.key, form.has('qr')) } catch {
+      throw new AgendaError('Não foi possível confirmar a conexão. Confira o endereço habilitado e a chave de integração.')
+    }
+    return '/diagnostico'
+  }, '/diagnostico')
+}

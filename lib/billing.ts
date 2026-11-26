@@ -1,10 +1,11 @@
+import type Stripe from 'stripe'
 import { AgendaError } from './agenda'
 import { db } from './db'
 import { stripeForNewPayments } from './stripe-settings'
 
-export async function subscriptionCheckout(input: { tenantId: string; email: string; planId: string; cycle: 'monthly' | 'annual'; origin: string }) {
+export async function subscriptionCheckout(input: { tenantId: string; email: string; planId: string; cycle: 'monthly' | 'annual'; origin: string }, provider?: Stripe) {
   const { tenantId, email, planId, cycle, origin } = input
-  const api = await stripeForNewPayments()
+  const api = provider ?? await stripeForNewPayments()
   const route = await db.$transaction(async tx => {
     await tx.$queryRaw`SELECT id FROM "Tenant" WHERE id = ${tenantId} FOR UPDATE`
     const tenant = await tx.tenant.findUniqueOrThrow({ where: { id: tenantId }, include: { billingCheckout: true } })

@@ -352,6 +352,8 @@ model StripeSettings {
   publishableKey String
   mode String
   encrypted String
+  previousWebhooks String?
+  previousWebhooksUntil DateTime?
   paused Boolean @default(false)
   checkedAt DateTime?
   checkSucceeded Boolean?

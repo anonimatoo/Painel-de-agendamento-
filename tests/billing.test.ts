@@ -75,3 +75,38 @@ test('programação de fatura não duplica avisos e cancela cobranças obsoletas
     else await db.commercialRule.delete({ where: { kind } })
   }
 })
+
+test('duas contratações concorrentes reaproveitam a tentativa, o preço e a chave', async () => {
+  const { subscriptionCheckout } = await import('../lib/billing')
+  const suffix = randomUUID()
+  const plan = await db.plan.create({ data: {
+    name: 'Teste concorrente', description: 'Teste', monthlyCents: 5000, annualCents: 50000,
+    monthlyPriceId: 'price_m_' + suffix, annualPriceId: 'price_a_' + suffix
+  } })
+  const tenant = await db.tenant.create({ data: { name: 'Teste', slug: suffix } })
+  let customerRequests = 0
+  const calls: { price: string; key: string }[] = []
+  const api = {
+    customers: { create: async () => { customerRequests++; return { id: 'cus_' + suffix } } },
+    subscriptions: { list: async function* () { yield* [] } },
+    checkout: { sessions: {
+      list: async () => ({ data: [] }),
+      create: async (params: { line_items: { price: string }[] }, options: { idempotencyKey: string }) => {
+        calls.push({ price: params.line_items[0].price, key: options.idempotencyKey })
+        return { url: 'https://checkout.stripe.com/fixture', status: 'open' }
+      }
+    } }
+  } as unknown as Stripe
+  try {
+    const input = { tenantId: tenant.id, email: 'test@example.test', planId: plan.id, origin: 'http://localhost:3000' }
+    const results = await Promise.all([subscriptionCheckout({ ...input, cycle: 'monthly' }, api), subscriptionCheckout({ ...input, cycle: 'annual' }, api)])
+    assert.equal(results[0], results[1])
+    assert.equal(customerRequests, 1)
+    assert.equal(calls.length, 2)
+    assert.deepEqual(calls[0], calls[1])
+    assert.equal(await db.billingCheckout.count({ where: { tenantId: tenant.id } }), 1)
+  } finally {
+    await db.tenant.delete({ where: { id: tenant.id } })
+    await db.plan.delete({ where: { id: plan.id } })
+  }
+})

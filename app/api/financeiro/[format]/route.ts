@@ -1,3 +1,4 @@
+import { can } from '@/lib/permissions'
 import { DateTime } from 'luxon'
 import writeXlsx from 'write-excel-file/node'
 import { membership, userSession } from '@/lib/auth'
@@ -9,7 +10,7 @@ export async function GET(_request: Request, { params }: { params: Promise<{ for
   const user = await userSession()
   if (!user) return new Response(null, { status: 401 })
   const member = await membership(user.id)
-  if (!member || !['ADMIN', 'MANAGER'].includes(member.role) || !member.tenant.active || member.tenant.suspended) return new Response(null, { status: 403 })
+  if (!member || (!can(member, 'finance.read') || !can(member, 'report.export')) || !member.tenant.active || member.tenant.suspended) return new Response(null, { status: 403 })
   const zone = member.tenant.timezone
   const report = await cashReport(member.tenantId, zone)
   const headers = {

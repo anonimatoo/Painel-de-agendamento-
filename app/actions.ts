@@ -5,6 +5,7 @@ import { z } from 'zod'
 import { randomUUID } from 'node:crypto'
 import { commercialKinds, commercialLabels, type CommercialKind } from '@/lib/commercial-rules'
 import { enqueueCommercial } from '@/lib/commercial-notices'
+import { can, permissionKeys, type Permission } from '@/lib/permissions'
 import { DateTime } from 'luxon'
 import { changeStock, reverseSale } from '@/lib/commerce'
 import { Prisma } from '@prisma/client'
@@ -168,8 +169,14 @@ export async function manage(operation: string, form: FormData) {
       return subscriptionCheckout({ tenantId, email: user.email, origin: base(), ...pay.parse(body) })
     }
     if (!tenant.active || tenant.suspended) throw new AgendaError('Seu estabelecimento precisa de uma assinatura ativa.')
-    const manager = member.role === 'ADMIN' || member.role === 'MANAGER'
-    if (!manager && !(member.role === 'RECEPTION' && ['customer', 'appointment', 'reschedule', 'wait-close'].includes(operation))) throw new AgendaError('Seu acesso não permite esta operação.')
+    const scopes: Record<string, Permission> = {
+      cover: 'brand.manage', service: 'service.manage', professional: 'team.professionals',
+      assignment: 'team.professionals', hours: 'team.professionals', customer: 'customer.create',
+      product: 'product.manage', reschedule: 'agenda.edit', block: 'agenda.edit', unblock: 'agenda.edit',
+      'wait-close': 'agenda.edit', refund: 'finance.refund'
+    }
+    const scope = operation === 'appointment' ? body.status === 'CANCELED' ? 'agenda.cancel' : 'agenda.edit' : scopes[operation]
+    if (scope ? !can(member, scope) : member.role !== 'ADMIN') throw new AgendaError('Seu acesso não permite esta operação.')
     switch (operation) {
       case 'settings': {
         if (member.role !== 'ADMIN') throw new AgendaError('Seu acesso não permite esta operação.')
@@ -190,7 +197,6 @@ export async function manage(operation: string, form: FormData) {
         break
       }
       case 'cover': {
-        if (member.role !== 'ADMIN') throw new AgendaError('Seu acesso não permite esta operação.')
         const image = form.get('cover')
         if (!(image instanceof File)) throw new AgendaError('Selecione uma imagem.')
         await storeMedia(tenantId, 'COVER', '', image)
@@ -239,7 +245,6 @@ export async function manage(operation: string, form: FormData) {
         await db.waitEntry.updateMany({ where: { id: id.parse(body.id), tenantId, closedAt: null }, data: { closedAt: new Date() } })
         return '/agenda'
       case 'refund': {
-        if (member.role !== 'ADMIN') throw new AgendaError('Seu acesso não permite esta operação.')
         await refundAppointment(tenantId, id.parse(form.get('id')))
         break
       }
@@ -268,7 +273,7 @@ export async function brandSettings(operation: 'profile' | 'upload' | 'delete', 
     const user = await userSession()
     if (!user) return '/login'
     const member = await membership(user.id)
-    if (!member || member.role !== 'ADMIN' || !member.tenant.active || member.tenant.suspended) return '/dashboard'
+    if (!member || !can(member, 'brand.manage') || !member.tenant.active || member.tenant.suspended) return '/dashboard'
     const tenantId = member.tenantId
     if (operation === 'profile') {
       const values = z.object({
@@ -297,7 +302,12 @@ export async function commerce(operation: 'product' | 'stock' | 'sale' | 'revers
     const user = await userSession()
     if (!user) return '/login'
     const member = await membership(user.id)
-    if (!member || !['ADMIN', 'MANAGER'].includes(member.role) || !member.tenant.active || member.tenant.suspended) {
+    const scopes: Record<typeof operation, Permission> = {
+      product: 'product.manage', stock: 'stock.manage', sale: 'sale.create', reverse: 'sale.create',
+      entry: 'finance.write', settle: 'finance.write', 'refund-order': 'finance.refund', 'review-order': 'finance.read'
+    }
+    const scope = scopes[operation]
+    if (!scope || !member || !can(member, scope) || !member.tenant.active || member.tenant.suspended) {
       return '/dashboard'
     }
     const tenantId = member.tenantId
@@ -327,7 +337,6 @@ export async function commerce(operation: 'product' | 'stock' | 'sale' | 'revers
       if (!(await allowAttempt('review-order', tenantId, 30, 600))) throw new AgendaError('Aguarde antes de consultar outro pedido.')
       await reconcileOrder(order, member.tenant.stripeAccountId, await stripe())
     } else if (operation === 'refund-order') {
-      if (member.role !== 'ADMIN') throw new AgendaError('Seu acesso não permite esta operação.')
       await refundOrder(tenantId, id.parse(body.id))
     } else if (operation === 'entry') {
       const values = z.object({ title, kind: z.enum(['INCOME', 'EXPENSE']), cents: cents.min(1), dueAt: z.iso.date() }).parse(body)
@@ -346,7 +355,7 @@ export async function whatsappControl(_previous: { message?: string; qr?: string
     const user = await userSession()
     const member = user ? await membership(user.id) : null
     let instance = member?.tenant.whatsappInstance
-    if (!member || member.role !== 'ADMIN' || !member.tenant.active || member.tenant.suspended) {
+    if (!member || !can(member, 'whatsapp.manage') || !member.tenant.active || member.tenant.suspended) {
       return { message: 'A conexão do WhatsApp ainda não está disponível para esta conta.' }
     }
     const operation = z.enum(['status', 'connect', 'logout', 'test', 'remove']).parse(form.get('operation'))
@@ -551,7 +560,7 @@ export async function reviewPayment(form: FormData) {
   await perform(async () => {
     const user = await userSession()
     const member = user ? await membership(user.id) : null
-    if (!member || !['ADMIN', 'MANAGER'].includes(member.role)) return '/login'
+    if (!member || !can(member, 'finance.read')) return '/login'
     const reservation = await db.appointment.findFirst({
       where: { id: id.parse(form.get('id')), tenantId: member.tenantId, status: 'PENDING' }
     })
@@ -567,7 +576,7 @@ export async function saveWhatsAppPreferences(form: FormData) {
   await perform(async () => {
     const user = await userSession()
     const member = user ? await membership(user.id) : null
-    if (!member || member.role !== 'ADMIN' || !member.tenant.active || member.tenant.suspended) return '/dashboard'
+    if (!member || !can(member, 'whatsapp.manage') || !member.tenant.active || member.tenant.suspended) return '/dashboard'
     const values = z.object({
       reminderMinutes: z.coerce.number().int().min(0).max(10080),
       reminderTemplate: z.string().trim().max(500),
@@ -595,7 +604,7 @@ export async function createTeamInvite(_previous: { link?: string; message?: str
     if (!user || !member || member.role !== 'ADMIN' || !member.tenant.active || member.tenant.suspended) return { message: 'Acesso indisponível.' }
     if (!await allowAttempt('team-invite', member.tenantId, 20, 3600)) return { message: 'Aguarde antes de criar outro convite.' }
     const { inviteMember } = await import('@/lib/team')
-    const values = z.object({ email: credentials.shape.email, role: z.enum(['MANAGER', 'RECEPTION', 'PROFESSIONAL']), professionalId: z.string().max(100).optional() }).parse(Object.fromEntries(form))
+    const values = z.object({ email: credentials.shape.email, role: z.enum(['MANAGER', 'RECEPTION', 'PROFESSIONAL', 'FINANCE', 'READONLY']), professionalId: z.string().max(100).optional() }).parse(Object.fromEntries(form))
     const token = await inviteMember(member.tenantId, user.id, values.email, values.role, values.professionalId)
     return { link: base() + '/convite?codigo=' + token }
   } catch (error) {
@@ -725,4 +734,18 @@ export async function commercialRule(form: FormData) {
     await db.commercialRule.upsert({ where: { kind: config.kind }, create: config, update: config })
     return '/comunicacao'
   }, '/comunicacao')
+}
+
+export async function teamPermissions(form: FormData) {
+  await perform(async () => {
+    const user = await userSession()
+    const member = user ? await membership(user.id) : null
+    if (!user || !member || member.role !== 'ADMIN' || !member.tenant.active || member.tenant.suspended) return '/dashboard'
+    const target = id.parse(form.get('userId'))
+    const operation = z.enum(['custom', 'default']).parse(form.get('operation'))
+    const values = z.array(z.enum(permissionKeys)).parse(form.getAll('permissions'))
+    const { updateTeamPermissions } = await import('@/lib/team')
+    await updateTeamPermissions(member.tenantId, user.id, target, operation === 'custom' ? values : null)
+    return '/equipe'
+  }, '/equipe')
 }

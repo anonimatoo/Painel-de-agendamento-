@@ -1,3 +1,4 @@
+import { can } from '@/lib/permissions'
 import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { DateTime } from 'luxon'
@@ -17,7 +18,7 @@ export default async function Reconciliation({ searchParams }: { searchParams: P
   const platform = user.platformAdmin
   if (platform && !user.adminMfaVerified) redirect('/login')
   const member = platform ? null : await membership(user.id)
-  if (!platform && (!member || !['ADMIN', 'MANAGER'].includes(member.role))) redirect('/dashboard')
+  if (!platform && (!member || !can(member, 'finance.read'))) redirect('/dashboard')
   const account = member?.tenant.stripeAccountId
   const zone = member?.tenant.timezone ?? 'America/Sao_Paulo'
   const today = DateTime.now().setZone(zone)

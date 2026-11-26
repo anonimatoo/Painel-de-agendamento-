@@ -9,6 +9,8 @@ enum Role {
   MANAGER
   RECEPTION
   PROFESSIONAL
+  FINANCE
+  READONLY
 }
 enum Status {
   PENDING
@@ -90,6 +92,8 @@ model Member {
   userId String
   role Role
   disabledAt DateTime?
+  permissions String[] @default([])
+  permissionsCustomized Boolean @default(false)
   professionalId String?
   professional Professional? @relation(fields: [tenantId, professionalId], references: [tenantId, id])
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)

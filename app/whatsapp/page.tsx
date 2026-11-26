@@ -1,3 +1,4 @@
+import { can } from '@/lib/permissions'
 import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { membership, userSession } from '@/lib/auth'
@@ -17,7 +18,7 @@ export default async function WhatsApp({ searchParams }: { searchParams: Promise
   const user = await userSession()
   if (!user) redirect('/login')
   const member = await membership(user.id)
-  if (!member || member.role !== 'ADMIN' || !member.tenant.active || member.tenant.suspended) redirect('/dashboard')
+  if (!member || !can(member, 'whatsapp.manage') || !member.tenant.active || member.tenant.suspended) redirect('/dashboard')
   const tenant = member.tenant
   const history = await db.reminder.findMany({
     where: { appointment: { tenantId: tenant.id } },

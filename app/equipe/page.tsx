@@ -2,12 +2,13 @@ import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { membership, userSession } from '@/lib/auth'
 import { db } from '@/lib/db'
-import { teamAccess } from '../actions'
+import { defaultPermissions, permissionKeys, permissionLabels } from '@/lib/permissions'
+import { teamAccess, teamPermissions } from '../actions'
 import { Brand, ErrorNote } from '../ui'
 import { InviteForm } from './invite'
 
-const roles: Record<string, string> = { ADMIN: 'Administrador', MANAGER: 'Gerência', RECEPTION: 'Recepção', PROFESSIONAL: 'Profissional' }
-const actions: Record<string, string> = { INVITED: 'Convite criado', JOINED: 'Convite aceito', DISABLED: 'Acesso desativado', ENABLED: 'Acesso reativado', SESSIONS_REVOKED: 'Sessões encerradas', CONNECT_PAUSED: 'Recebimentos pausados', CONNECT_RESUMED: 'Recebimentos retomados' }
+const roles: Record<string, string> = { ADMIN: 'Administrador', MANAGER: 'Gerência', RECEPTION: 'Recepção', PROFESSIONAL: 'Profissional', FINANCE: 'Financeiro', READONLY: 'Consulta' }
+const actions: Record<string, string> = { INVITED: 'Convite criado', JOINED: 'Convite aceito', DISABLED: 'Acesso desativado', ENABLED: 'Acesso reativado', SESSIONS_REVOKED: 'Sessões encerradas', CONNECT_PAUSED: 'Recebimentos pausados', CONNECT_RESUMED: 'Recebimentos retomados', PERMISSIONS_UPDATED: 'Permissões atualizadas' }
 
 export default async function Team({ searchParams }: { searchParams: Promise<{ erro?: string }> }) {
   const user = await userSession()
@@ -31,6 +32,14 @@ export default async function Team({ searchParams }: { searchParams: Promise<{ e
         <button className="outline" name="state" value={person.disabledAt ? 'enable' : 'disable'}>{person.disabledAt ? 'Reativar' : 'Desativar'}</button>
         {!person.disabledAt && <button className="outline" name="state" value="revoke">Encerrar sessões</button>}
       </form>}
+      {person.role !== 'ADMIN' && <details><summary>Permissões individuais</summary><form action={teamPermissions}>
+        <input type="hidden" name="userId" value={person.userId} />
+        {permissionKeys.filter(key => person.role !== 'PROFESSIONAL' || key === 'agenda.read').map(key => <label className="check" key={key}>
+          <input name="permissions" type="checkbox" value={key} defaultChecked={(person.permissionsCustomized ? person.permissions : defaultPermissions(person.role)).includes(key)} />
+          {permissionLabels[key]}
+        </label>)}
+        <div className="inline"><button name="operation" value="custom">Salvar permissões</button><button name="operation" value="default" className="outline">Restaurar perfil padrão</button></div>
+      </form></details>}
     </li>)}</ul></article>
     <article><h2>Atividade recente</h2>{changes.length ? <ul>{changes.map(event => <li key={event.id}>
       {date.format(event.createdAt)} · {actions[event.action]} · {event.subject}

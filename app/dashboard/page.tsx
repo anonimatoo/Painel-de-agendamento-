@@ -1,3 +1,4 @@
+import { can } from '@/lib/permissions'
 import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { CalendarDays, ClipboardList, Settings, UsersRound, Wallet } from 'lucide-react'
@@ -18,35 +19,35 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
   const member = await membership(user.id)
   if (!member) redirect(user.platformAdmin ? '/super-admin' : '/')
   const { tenant, role } = member
-  const own = role === 'PROFESSIONAL' ? member.professionalId : null
+  const own = role === 'PROFESSIONAL' && can(member, 'agenda.read') ? member.professionalId : null
   const enabled = tenant.active && !tenant.suspended
-  const manager = role === 'ADMIN' || role === 'MANAGER'
-  const desk = manager || role === 'RECEPTION'
+  const manager = can(member, 'service.read') || can(member, 'service.manage') || can(member, 'team.professionals') || can(member, 'product.manage')
+  const desk = role !== 'PROFESSIONAL' && can(member, 'agenda.read')
   const tenantId = tenant.id
   const month = DateTime.now().setZone(tenant.timezone).startOf('month')
   const query = await searchParams
   const [plans, services, professionals, customers, products, appointments, monthlyCount, paid, connect] = await Promise.all([
     role === 'ADMIN' && !enabled ? db.plan.findMany({ where: { active: true } }) : [],
-    enabled && manager ? db.service.findMany({ where: { tenantId }, orderBy: { name: 'asc' } }) : [],
-    enabled && manager ? db.professional.findMany({ where: { tenantId }, orderBy: { name: 'asc' }, include: { hours: true, assignments: { include: { service: true } } } }) : [],
-    enabled && desk ? db.customer.findMany({ where: { tenantId }, orderBy: { name: 'asc' }, take: 100 }) : [],
-    enabled && manager ? db.product.findMany({ where: { tenantId }, orderBy: { name: 'asc' } }) : [],
+    enabled && manager && (can(member, 'service.read') || can(member, 'service.manage') || can(member, 'team.professionals')) ? db.service.findMany({ where: { tenantId }, orderBy: { name: 'asc' } }) : [],
+    enabled && manager && can(member, 'team.professionals') ? db.professional.findMany({ where: { tenantId }, orderBy: { name: 'asc' }, include: { hours: true, assignments: { include: { service: true } } } }) : [],
+    enabled && desk && can(member, 'customer.read') ? db.customer.findMany({ where: { tenantId }, orderBy: { name: 'asc' }, take: 100 }) : [],
+    enabled && manager && can(member, 'product.manage') ? db.product.findMany({ where: { tenantId }, orderBy: { name: 'asc' } }) : [],
     enabled && (desk || own) ? db.appointment.findMany({
       where: { tenantId, ...(own ? { professionalId: own } : {}), startsAt: { gte: month.toJSDate() } }, orderBy: { startsAt: 'asc' }, take: 100,
       include: { service: true, customer: true, professional: true }
     }) : [],
     enabled && desk ? db.appointment.count({ where: { tenantId, status: { in: ['CONFIRMED','COMPLETED'] }, startsAt: { gte: month.toJSDate(), lt: month.plus({ months: 1 }).toJSDate() } } }) : 0,
-    enabled && manager ? db.appointment.findMany({ where: { tenantId, refundedAt: null, paidAt: { gte: month.toJSDate(), lt: month.plus({ months: 1 }).toJSDate() } }, select: { cents: true, chargeCents: true } }) : [],
+    enabled && can(member, 'finance.read') ? db.appointment.findMany({ where: { tenantId, refundedAt: null, paidAt: { gte: month.toJSDate(), lt: month.plus({ months: 1 }).toJSDate() } }, select: { cents: true, chargeCents: true } }) : [],
     enabled && role === 'ADMIN' && tenant.stripeAccountId ? connectStatus(tenant.stripeAccountId).catch(() => null) : null
   ])
   return <div className="shell">
     <aside><Brand /><nav>
       <Link href="/dashboard"><ClipboardList /> Visão geral</Link>
       {enabled && desk && <Link href="/agenda"><CalendarDays /> Agenda</Link>}
-      {enabled && manager && <Link href="/comercial"><Wallet /> Estoque e financeiro</Link>}
+      {enabled && (can(member, 'finance.read') || can(member, 'stock.manage') || can(member, 'sale.create') || can(member, 'product.manage')) && <Link href="/comercial"><Wallet /> Estoque e financeiro</Link>}
       {enabled && manager && <a href="#equipe"><UsersRound /> Equipe e catálogo</a>}
       {enabled && role === 'ADMIN' && <a href="#configuracoes"><Settings /> Configurações</a>}
-    {role === 'ADMIN' && <Link href="/primeiro-acesso">Primeiro acesso</Link>}{enabled && role === 'ADMIN' && <Link href="/equipe">Equipe e permissões</Link>}{enabled && role === 'ADMIN' && <Link href="/whatsapp">WhatsApp</Link>}<Link href="/conta">Minha conta</Link></nav><form action={logout}><button className="subtle">Sair</button></form></aside>
+    {role === 'ADMIN' && <Link href="/primeiro-acesso">Primeiro acesso</Link>}{enabled && role === 'ADMIN' && <Link href="/equipe">Equipe e permissões</Link>}{enabled && can(member, 'whatsapp.manage') && <Link href="/whatsapp">WhatsApp</Link>}<Link href="/conta">Minha conta</Link></nav><form action={logout}><button className="subtle">Sair</button></form></aside>
     <main className="content">
       <div className="row"><div><p className="eyebrow">Estabelecimento</p><h1>{tenant.name}</h1></div>
         {enabled && <Link className="button outline" href={'/estabelecimento/' + tenant.slug}>Ver página pública</Link>}</div>
@@ -64,7 +65,7 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
       {enabled && desk && <>
         <section className="grid metrics">
           <article><CalendarDays /><p>Atendimentos no mês</p><strong>{monthlyCount}</strong></article>
-          {manager && <article><Wallet /><p>Recebido online no mês</p><strong>{brl(paid.reduce((sum, row) => sum + (row.chargeCents ?? row.cents), 0))}</strong></article>}
+          {can(member, 'finance.read') && <article><Wallet /><p>Recebido online no mês</p><strong>{brl(paid.reduce((sum, row) => sum + (row.chargeCents ?? row.cents), 0))}</strong></article>}
         </section>
         <article id="agenda"><h2>Agenda</h2>
           {!appointments.length ? <p>Nenhum atendimento para exibir.</p> : <div className="scroll"><table><thead><tr><th>Horário</th><th>Cliente</th><th>Serviço</th><th>Profissional</th><th>Situação</th><th>Ações</th></tr></thead>
@@ -73,7 +74,7 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
             {item.startsAt <= new Date() && <button className="outline" name="status" value="COMPLETED">Concluir</button>}
             {item.startsAt <= new Date() && <button className="outline" name="status" value="NO_SHOW">Registrar falta</button>}
             {!item.paidAt && <button className="outline" name="status" value="CANCELED">Cancelar</button>}</form>}
-            {role === 'ADMIN' && item.status === 'CONFIRMED' && item.paidAt && <form action={manage.bind(null, 'refund')}>
+            {can(member, 'finance.refund') && item.status === 'CONFIRMED' && item.paidAt && <form action={manage.bind(null, 'refund')}>
               <input type="hidden" name="id" value={item.id} /><button className="outline">Estornar e cancelar</button>
             </form>}
           </td></tr>)}</tbody></table></div>}

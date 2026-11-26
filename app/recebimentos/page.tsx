@@ -1,3 +1,4 @@
+import { can } from '@/lib/permissions'
 import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { membership, userSession } from '@/lib/auth'
@@ -10,7 +11,7 @@ export default async function Receipts({ searchParams }: { searchParams: Promise
   const user = await userSession()
   if (!user) redirect('/login')
   const member = await membership(user.id)
-  if (!member || !['ADMIN', 'MANAGER'].includes(member.role)) redirect('/dashboard')
+  if (!member || !can(member, 'finance.read')) redirect('/dashboard')
   const tenant = member.tenant
   const [status, bookings, obligations] = await Promise.all([
     tenant.stripeAccountId ? connectStatus(tenant.stripeAccountId).catch(() => null) : null,

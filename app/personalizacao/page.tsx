@@ -1,3 +1,4 @@
+import { can } from '@/lib/permissions'
 import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { membership, userSession } from '@/lib/auth'
@@ -11,7 +12,7 @@ export default async function Branding({ searchParams }: { searchParams: Promise
   const user = await userSession()
   if (!user) redirect('/login')
   const member = await membership(user.id)
-  if (!member || member.role !== 'ADMIN' || !member.tenant.active || member.tenant.suspended) redirect('/dashboard')
+  if (!member || !can(member, 'brand.manage') || !member.tenant.active || member.tenant.suspended) redirect('/dashboard')
   const { tenant } = member
   const where = { tenantId: tenant.id }
   const [media, professionals, services, products, query] = await Promise.all([

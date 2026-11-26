@@ -9,7 +9,7 @@ export function InviteForm({ professionals }: { professionals: { id: string; nam
   return <>
     <form action={action}>
       <Field label="E-mail da pessoa convidada" name="email" type="email" />
-      <label>Função<select name="role"><option value="MANAGER">Gerência</option><option value="RECEPTION">Recepção</option><option value="PROFESSIONAL">Profissional</option></select></label>
+      <label>Função<select name="role"><option value="MANAGER">Gerência</option><option value="RECEPTION">Recepção</option><option value="PROFESSIONAL">Profissional</option><option value="FINANCE">Financeiro</option><option value="READONLY">Consulta</option></select></label>
       <label>Vínculo para função de profissional<select name="professionalId"><option value="">Selecione</option>
         {professionals.map(person => <option key={person.id} value={person.id}>{person.name}</option>)}
       </select></label>

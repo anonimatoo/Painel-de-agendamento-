@@ -1,10 +1,11 @@
 import { createHash, randomBytes } from 'node:crypto'
+import { permissionKeys, type Permission } from './permissions'
 import { db } from './db'
 import { AgendaError } from './agenda'
 import { hashPassword } from './auth'
 
 const hash = (token: string) => createHash('sha256').update(token).digest('hex')
-type TeamRole = 'MANAGER' | 'RECEPTION' | 'PROFESSIONAL'
+type TeamRole = 'MANAGER' | 'RECEPTION' | 'PROFESSIONAL' | 'FINANCE' | 'READONLY'
 
 export async function inviteMember(tenantId: string, actorId: string, email: string, role: TeamRole, professionalId?: string) {
   const token = randomBytes(32).toString('base64url')
@@ -54,5 +55,21 @@ export async function manageTeamAccess(tenantId: string, actorId: string, userId
     await tx.teamEvent.create({
       data: { tenantId, actorId, subject: member.user.email, action: state === 'disable' ? 'DISABLED' : state === 'enable' ? 'ENABLED' : 'SESSIONS_REVOKED' }
     })
+  })
+}
+
+export async function updateTeamPermissions(tenantId: string, actorId: string, userId: string, values: Permission[] | null) {
+  await db.$transaction(async tx => {
+    const owner = await tx.member.findFirst({ where: { tenantId, userId: actorId, role: 'ADMIN', disabledAt: null } })
+    const subject = await tx.member.findFirst({ where: { tenantId, userId, role: { not: 'ADMIN' } }, include: { user: { select: { email: true } } } })
+    if (!owner || !subject || actorId === userId) throw new AgendaError('Você não pode alterar este acesso.')
+    const permissions = (values ?? []).filter(item => permissionKeys.includes(item))
+    if (subject.role === 'PROFESSIONAL' && permissions.some(item => item !== 'agenda.read')) throw new AgendaError('Este perfil acessa somente sua própria agenda.')
+    await tx.member.update({
+      where: { tenantId_userId: { tenantId, userId } },
+      data: { permissionsCustomized: values !== null, permissions: [...new Set(permissions)] }
+    })
+    await tx.session.deleteMany({ where: { userId } })
+    await tx.teamEvent.create({ data: { tenantId, actorId, subject: subject.user.email, action: 'PERMISSIONS_UPDATED' } })
   })
 }

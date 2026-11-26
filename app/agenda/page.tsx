@@ -1,3 +1,4 @@
+import { can } from '@/lib/permissions'
 import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { DateTime } from 'luxon'
@@ -14,9 +15,9 @@ export default async function AgendaPage({ searchParams }: { searchParams: Promi
   const user = await userSession()
   if (!user) redirect('/login')
   const member = await membership(user.id)
-  if (!member || member.role === 'PROFESSIONAL' || !member.tenant.active || member.tenant.suspended) redirect('/dashboard')
+  if (!member || (!can(member, 'agenda.read') || member.role === 'PROFESSIONAL') || !member.tenant.active || member.tenant.suspended) redirect('/dashboard')
   const tenantId = member.tenantId
-  const manager = member.role === 'ADMIN' || member.role === 'MANAGER'
+  const manager = can(member, 'team.professionals') && can(member, 'agenda.edit')
   const zone = member.tenant.timezone
   const now = new Date()
   const [appointments, professionals, blocks, waiting, history] = await Promise.all([

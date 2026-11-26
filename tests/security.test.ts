@@ -89,3 +89,27 @@ test('convite de profissional limita o vínculo ao estabelecimento e encerrament
     await db.tenant.deleteMany({ where: { id: { in: [first.id, second.id] } } })
   }
 })
+
+test('permissões individuais revogam sessões e bloqueiam escalada entre funcionários', async () => {
+  const { can } = await import('../lib/permissions')
+  const { updateTeamPermissions } = await import('../lib/team')
+  const tenant = await db.tenant.create({ data: { name: 'Permissões', slug: randomUUID(), active: true } })
+  const owner = await db.user.create({ data: { email: randomUUID() + '@example.test', password: 'fixture' } })
+  const staff = await db.user.create({ data: { email: randomUUID() + '@example.test', password: 'fixture' } })
+  try {
+    const key = { tenantId: tenant.id, userId: staff.id }
+    await db.member.createMany({ data: [{ ...key, role: 'RECEPTION' }, { tenantId: tenant.id, userId: owner.id, role: 'ADMIN' }] })
+    await db.session.create({ data: { tokenHash: randomUUID(), userId: staff.id, expiresAt: new Date(Date.now() + 60_000) } })
+    await assert.rejects(updateTeamPermissions(tenant.id, staff.id, owner.id, ['agenda.read']))
+    await assert.rejects(updateTeamPermissions(tenant.id, staff.id, staff.id, ['finance.read']))
+    await updateTeamPermissions(tenant.id, owner.id, staff.id, ['agenda.read'])
+    const member = await db.member.findUniqueOrThrow({ where: { tenantId_userId: key } })
+    assert.equal(can(member, 'agenda.read'), true)
+    assert.equal(can(member, 'agenda.cancel'), false)
+    assert.equal(can(member, 'finance.read'), false)
+    assert.equal(await db.session.count({ where: { userId: staff.id } }), 0)
+  } finally {
+    await db.tenant.delete({ where: { id: tenant.id } })
+    await db.user.deleteMany({ where: { id: { in: [owner.id, staff.id] } } })
+  }
+})

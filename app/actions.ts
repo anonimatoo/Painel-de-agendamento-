@@ -3,6 +3,8 @@
 import { redirect, unstable_rethrow } from 'next/navigation'
 import { z } from 'zod'
 import { randomUUID } from 'node:crypto'
+import { commercialKinds, commercialLabels, type CommercialKind } from '@/lib/commercial-rules'
+import { enqueueCommercial } from '@/lib/commercial-notices'
 import { DateTime } from 'luxon'
 import { changeStock, reverseSale } from '@/lib/commerce'
 import { Prisma } from '@prisma/client'
@@ -67,10 +69,17 @@ export async function account(action: 'login' | 'register', form: FormData) {
       return user.platformAdmin ? '/conta' : '/dashboard'
     }
     const { business, link } = z.object({ business: title, link: slug }).parse(Object.fromEntries(form))
-    const user = await db.user.create({ data: {
-      email: data.email, password: await hashPassword(data.password),
-      memberships: { create: { role: 'ADMIN', tenant: { create: { name: business, slug: link } } } }
-    } })
+    const password = await hashPassword(data.password)
+    const user = await db.$transaction(async tx => {
+      const created = await tx.user.create({ data: {
+        email: data.email, password,
+        memberships: { create: { role: 'ADMIN', tenant: { create: { name: business, slug: link } } } }
+      }, include: { memberships: { select: { tenantId: true } } } })
+      for (const kind of ['REGISTERED', 'WELCOME'] as const) await enqueueCommercial(tx, {
+        tenantId: created.memberships[0].tenantId, kind, reference: created.id
+      })
+      return created
+    })
     await startSession(user.id)
     if (mailConfigured()) await sendAccountLink(user, 'EMAIL_VERIFY').catch(() => console.error('email-verification-delivery'))
     return '/dashboard'
@@ -438,10 +447,13 @@ export async function admin(operation: 'plan' | 'suspend' | 'whatsapp' | 'stripe
       ])
     } else {
       const data = z.object({ tenantId: id, suspended: z.enum(['true', 'false']) }).parse(body)
-      await db.$transaction([
-        db.tenant.update({ where: { id: data.tenantId }, data: { suspended: data.suspended === 'true' } }),
-        db.adminAudit.create({ data: { actorId: user.id, targetId: data.tenantId, action: data.suspended === 'true' ? 'TENANT_SUSPENDED' : 'TENANT_REACTIVATED' } })
-      ])
+      await db.$transaction(async tx => {
+        const suspended = data.suspended === 'true'
+        const changed = await tx.tenant.updateMany({ where: { id: data.tenantId, suspended: !suspended }, data: { suspended } })
+        if (!changed.count) return
+        const audit = await tx.adminAudit.create({ data: { actorId: user.id, targetId: data.tenantId, action: suspended ? 'TENANT_SUSPENDED' : 'TENANT_REACTIVATED' } })
+        await enqueueCommercial(tx, { tenantId: data.tenantId, kind: suspended ? 'SUSPENDED' : 'REACTIVATED', reference: audit.id })
+      })
     }
     return '/super-admin'
   }, '/super-admin')
@@ -690,4 +702,27 @@ export async function manageConnectAvailability(form: FormData) {
     await changeConnectAvailability(member.tenantId, user.id, pause)
     return '/recebimentos'
   }, '/recebimentos')
+}
+
+export async function commercialRule(form: FormData) {
+  await perform(async () => {
+    const user = await userSession()
+    if (!user?.platformAdmin || !user.adminMfaVerified) return '/login'
+    const values = z.object({
+      kind: z.enum(commercialKinds), hour: z.coerce.number().int().min(0).max(23),
+      leadDays: z.coerce.number().int().min(0).max(60), template: z.string().trim().min(10).max(1500)
+    }).parse(Object.fromEntries(form))
+    if (form.get('operation') === 'test') {
+      if (!user.emailVerifiedAt) throw new AgendaError('Confirme seu e-mail antes de testar o envio.')
+      if (!await allowAttempt('commercial-test', user.id, 5, 3600)) throw new AgendaError('Aguarde antes de enviar outro teste.')
+      const label = commercialLabels[values.kind as CommercialKind]
+      const { sendEmail } = await import('@/lib/mail')
+      await sendEmail({ to: user.email, subject: 'Prévia autorizada · ' + label,
+        text: values.template.replaceAll('{evento}', label).replaceAll('{estabelecimento}', 'Seu estabelecimento').replaceAll('{detalhes}', 'Prévia de mensagem do CS Agenda Pro.') })
+      return '/comunicacao?enviado=1'
+    }
+    const config = { ...values, enabled: form.has('enabled') }
+    await db.commercialRule.upsert({ where: { kind: config.kind }, create: config, update: config })
+    return '/comunicacao'
+  }, '/comunicacao')
 }

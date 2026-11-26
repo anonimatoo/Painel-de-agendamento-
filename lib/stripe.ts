@@ -55,7 +55,7 @@ export async function applyEvent(event: Stripe.Event, client?: Stripe) {
       const invoice = await api.invoices.retrieve(incoming.id)
       const invoiceCustomer = typeof invoice.customer === 'string' ? invoice.customer : invoice.customer?.id
       if (invoiceCustomer !== customer) return
-      await updateInvoice(tx, tenant.id, invoice)
+      await updateInvoice(tx, tenant.id, invoice, event.type)
       const subscription = invoice.parent?.subscription_details?.subscription
       subscriptionId = typeof subscription === 'string' ? subscription : subscription?.id
     }

@@ -1,6 +1,8 @@
 import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { userSession } from '@/lib/auth'
+import { commercialKinds, commercialLabels, defaultCommercialTemplate, leadDefaults, type CommercialKind } from '@/lib/commercial-rules'
+import { RuleEditor } from './rule-editor'
 import { db } from '@/lib/db'
 import { sendInvoiceNotice } from '../actions'
 import { Brand, brl, ErrorNote } from '../ui'
@@ -9,17 +11,28 @@ export default async function Communication({ searchParams }: { searchParams: Pr
   const user = await userSession()
   if (!user?.platformAdmin || !user.adminMfaVerified) redirect('/login')
   const query = await searchParams
-  const [invoices, sends] = await Promise.all([
+  const [invoices, sends, rules, history] = await Promise.all([
     db.billingInvoice.findMany({
       where: { status: 'open', currency: 'brl', tenant: { members: { some: { role: 'ADMIN', disabledAt: null, user: { emailVerifiedAt: { not: null } } } } } },
       orderBy: { issuedAt: 'desc' }, take: 60, include: { tenant: { select: { name: true } } }
     }),
-    db.adminAudit.findMany({ where: { action: 'INVOICE_NOTICE_SENT' }, orderBy: { createdAt: 'desc' }, take: 30 })
+    db.adminAudit.findMany({ where: { action: 'INVOICE_NOTICE_SENT' }, orderBy: { createdAt: 'desc' }, take: 30 }),
+    db.commercialRule.findMany(),
+    db.commercialNotice.findMany({ orderBy: { sendAt: 'desc' }, take: 40, include: { tenant: { select: { name: true } } } })
   ])
   const date = new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short', timeZone: 'America/Sao_Paulo' })
   return <div className="site"><header><Brand /><Link href="/super-admin">Voltar à administração</Link></header><main className="content">
     <h1>Comunicação com assinantes</h1><ErrorNote error={query.erro} />
     {query.enviado && <p className="success" role="status">O serviço de e-mail aceitou o aviso.</p>}
+    <article><h2>Automações</h2>{commercialKinds.map(kind => {
+      const rule = rules.find(item => item.kind === kind)
+      return <RuleEditor key={kind} kind={kind} label={commercialLabels[kind]} initial={rule?.template ?? defaultCommercialTemplate}
+        enabled={rule?.enabled ?? false} hour={rule?.hour ?? 9} leadDays={rule?.leadDays ?? leadDefaults[kind] ?? 0} />
+    })}</article>
+    <article><h2>Histórico automático</h2>{history.length ? <ul>{history.map(item => <li key={item.id}>
+      {date.format(item.sendAt)} · {item.tenant.name} · {commercialLabels[item.kind as CommercialKind]} ·
+      {' '}{({ QUEUED: 'Agendada', SENDING: 'Em envio', SENT: 'Aceita pelo serviço de e-mail', REVIEW: 'Em verificação', FAILED: 'Falhou', CANCELED: 'Cancelada' } as Record<string,string>)[item.state]} · {item.attempts} tentativa(s)
+    </li>)}</ul> : <p>Nenhum aviso automático registrado.</p>}</article>
     <article><h2>Avisar sobre fatura em aberto</h2>
       <p>O responsável recebe o link da fatura existente para consultar e regularizar o pagamento.</p>
       {invoices.length ? <ul>{invoices.map(invoice => <li key={invoice.id}>{invoice.tenant.name} · {brl(Math.max(0, invoice.amountDue - invoice.amountPaid))} · {date.format(invoice.issuedAt)}

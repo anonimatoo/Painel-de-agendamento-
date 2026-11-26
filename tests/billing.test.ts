@@ -50,3 +50,28 @@ test('fatura atrasada e eventos fora de ordem consultam a situação atual', asy
     await db.plan.delete({ where: { id: plan.id } })
   }
 })
+
+test('programação de fatura não duplica avisos e cancela cobranças obsoletas', async () => {
+  const { enqueueInvoiceNotices } = await import('../lib/commercial-notices')
+  const token = randomUUID()
+  const tenant = await db.tenant.create({ data: { slug: token, name: 'Testes de comunicação' } })
+  const kind = 'DUE_7'
+  const prior = await db.commercialRule.findUnique({ where: { kind } })
+  const config = { enabled: true, hour: 9, leadDays: 7, template: '{evento} {detalhes}' }
+  await db.commercialRule.upsert({ where: { kind }, create: { kind, ...config }, update: config })
+  const invoice = {
+    id: 'in_' + token, status: 'open', currency: 'brl', amount_remaining: 3500,
+    due_date: Math.floor(Date.now() / 1000) + 8 * 86_400
+  } as Stripe.Invoice
+  try {
+    await Promise.all([db.$transaction(tx => enqueueInvoiceNotices(tx, tenant.id, invoice)), db.$transaction(tx => enqueueInvoiceNotices(tx, tenant.id, invoice))])
+    const where = { tenantId: tenant.id, kind, invoiceId: invoice.id }
+    assert.equal(await db.commercialNotice.count({ where }), 1)
+    await db.$transaction(tx => enqueueInvoiceNotices(tx, tenant.id, { ...invoice, status: 'paid', amount_remaining: 0 }))
+    assert.equal((await db.commercialNotice.findFirstOrThrow({ where })).state, 'CANCELED')
+  } finally {
+    await db.tenant.delete({ where: { id: tenant.id } })
+    if (prior) await db.commercialRule.update({ where: { kind }, data: prior })
+    else await db.commercialRule.delete({ where: { kind } })
+  }
+})

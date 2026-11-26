@@ -1,14 +1,16 @@
 import type Stripe from 'stripe'
 import type { Prisma } from '@prisma/client'
+import { enqueueInvoiceNotices, enqueueSubscriptionNotices } from './commercial-notices'
 import { db } from './db'
 
-export async function updateInvoice(tx: Prisma.TransactionClient, tenantId: string, invoice: Stripe.Invoice) {
+export async function updateInvoice(tx: Prisma.TransactionClient, tenantId: string, invoice: Stripe.Invoice, event?: string) {
   if (!invoice.id) return
   const data = {
     tenantId, status: invoice.status ?? 'draft', currency: invoice.currency,
     amountDue: invoice.amount_due, amountPaid: invoice.amount_paid,
     hostedUrl: invoice.hosted_invoice_url ?? null, issuedAt: new Date(invoice.created * 1000)
   }
+  await enqueueInvoiceNotices(tx, tenantId, invoice, event)
   await tx.billingInvoice.upsert({ where: { id: invoice.id }, update: data, create: { id: invoice.id, ...data } })
 }
 
@@ -16,6 +18,7 @@ export async function updateSubscription(tx: Prisma.TransactionClient, tenantId:
   const prices = subscription.items.data.map(item => item.price.id)
   const plan = await tx.plan.findFirst({ where: { OR: [{ monthlyPriceId: { in: prices } }, { annualPriceId: { in: prices } }] } })
   if (plan) {
+    await enqueueSubscriptionNotices(tx, tenantId, subscription, plan.name)
     await tx.subscription.upsert({
       where: { id: subscription.id }, update: { status: subscription.status, planId: plan.id },
       create: { id: subscription.id, status: subscription.status, planId: plan.id, tenantId }

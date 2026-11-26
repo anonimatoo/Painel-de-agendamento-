@@ -2,6 +2,7 @@ import { Queue, Worker } from 'bullmq'
 import { DateTime } from 'luxon'
 import { reminderOffsets } from '../lib/agenda'
 import { reconcileOrders } from '../lib/orders'
+import { dispatchCommercial } from '../lib/commercial-notices'
 import { reconcileBilling } from '../lib/billing-sync'
 import { stripe } from '../lib/stripe'
 import { reconcileAppointments } from '../lib/connect'
@@ -86,7 +87,9 @@ async function checkBilling() {
 }
 let billingPending: Promise<void> | undefined
 function tickBilling() {
-  if (!billingPending) billingPending = checkBilling()
+  if (!billingPending) billingPending = Promise.allSettled([checkBilling(), dispatchCommercial(stripe)]).then(results => {
+    if (results.some(result => result.status === 'rejected')) throw new Error('Falha ao processar assinaturas')
+  })
     .catch(() => console.error('billing-reconciliation-unavailable')).finally(() => { billingPending = undefined })
 }
 function tick() {

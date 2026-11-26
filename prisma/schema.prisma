@@ -58,6 +58,7 @@ model Tenant {
   billingCheckout BillingCheckout?
   billingSyncAt DateTime?
   billingInvoices BillingInvoice[]
+  commercialNotices CommercialNotice[]
   stripeAccountId String? @unique
   connectPausedAt DateTime?
   onlinePayment Boolean @default(false)
@@ -494,4 +495,31 @@ model ProfessionalCommission {
   cents Int
   paidAt DateTime?
   createdAt DateTime @default(now())
+}
+
+model CommercialRule {
+  kind String @id
+  enabled Boolean @default(false)
+  hour Int
+  leadDays Int
+  template String
+}
+
+model CommercialNotice {
+  id String @id @default(cuid())
+  tenantId String
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  kind String
+  reference String
+  invoiceId String?
+  subscriptionId String?
+  sendAt DateTime
+  state String @default("QUEUED")
+  claimedAt DateTime?
+  attempts Int @default(0)
+  planName String?
+  cents Int?
+  dueAt DateTime?
+  @@unique([tenantId, kind, reference])
+  @@index([state, sendAt])
 }

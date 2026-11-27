@@ -90,3 +90,8 @@ meter{width:min(100%,36rem);height:1.2rem}
 .mfa-recovery-codes li{background:#fff;border:1px solid var(--border);border-radius:8px;padding:.45rem;overflow-wrap:anywhere}
 .mfa-step>.button{justify-self:start}
 @media(max-width:580px){.mfa-enrollment{grid-template-columns:1fr}.mfa-qr{justify-self:center}}
+
+.stripe-settings-form{max-width:38rem}
+.stripe-credential{display:flex;align-items:stretch;gap:.5rem}
+.stripe-credential button{display:grid;place-items:center;flex-shrink:0;padding:.5rem .7rem}
+.stripe-settings-form .error{margin:.25rem 0}

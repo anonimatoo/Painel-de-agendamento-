@@ -1,9 +1,12 @@
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto'
 
+export function credentialEncryptionReady() {
+  return /^[a-f\d]{64}$/i.test(process.env.CREDENTIAL_ENCRYPTION_KEY?.trim() ?? '')
+}
+
 function key() {
-  const value = process.env.CREDENTIAL_ENCRYPTION_KEY
-  if (!value || !/^[a-f\d]{64}$/i.test(value)) throw new Error('Chave de criptografia indisponível')
-  return Buffer.from(value, 'hex')
+  if (!credentialEncryptionReady()) throw new Error('Chave de criptografia indisponível')
+  return Buffer.from(process.env.CREDENTIAL_ENCRYPTION_KEY!.trim(), 'hex')
 }
 
 export function seal(value: string, context: string) {

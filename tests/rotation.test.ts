@@ -45,3 +45,34 @@ test('rotação mantém janela do segredo anterior e isola assinatura, destino e
     else process.env.CREDENTIAL_ENCRYPTION_KEY = previousKey
   }
 })
+
+test('primeira configuração vinculada exige comprovação da mesma conta e do mesmo modo', async () => {
+  assert.equal(await db.stripeSettings.count(), 0)
+  const originalKey = process.env.CREDENTIAL_ENCRYPTION_KEY
+  const originalStripe = process.env.STRIPE_SECRET_KEY
+  process.env.CREDENTIAL_ENCRYPTION_KEY = randomBytes(32).toString('hex')
+  const actor = randomUUID()
+  const account = 'acct_fixtureLinked'
+  const provider = { accounts: { retrieve: async () => ({ id: account, charges_enabled: true, payouts_enabled: true }) } } as unknown as Stripe
+  const credentials = { secret: 'sk_test_fixtureLinked', billingWebhook: 'whsec_fixtureBilling', connectWebhook: 'whsec_fixtureConnect' }
+  const tenant = await db.tenant.create({ data: { name: 'Fixture vínculo', slug: actor, stripeCustomerId: 'cus_' + actor } })
+  const save = () => saveStripeConfiguration(actor, 'test', 'pk_test_fixtureLinked', credentials, provider)
+  try {
+    delete process.env.STRIPE_SECRET_KEY
+    await assert.rejects(save, /credencial Stripe anterior do ambiente está ausente/)
+    process.env.STRIPE_SECRET_KEY = 'sk_live_fixtureLinked'
+    await assert.rejects(save, /mesmo ambiente Stripe utilizado anteriormente/)
+    assert.equal(await db.stripeSettings.count(), 0)
+    process.env.STRIPE_SECRET_KEY = ' ' + credentials.secret + ' '
+    await save()
+    assert.equal((await db.stripeSettings.findUniqueOrThrow({ where: { id: 1 } })).accountId, account)
+  } finally {
+    await db.stripeSettings.deleteMany({ where: { accountId: account } })
+    await db.adminAudit.deleteMany({ where: { actorId: actor } })
+    await db.tenant.delete({ where: { id: tenant.id } })
+    if (originalKey === undefined) delete process.env.CREDENTIAL_ENCRYPTION_KEY
+    else process.env.CREDENTIAL_ENCRYPTION_KEY = originalKey
+    if (originalStripe === undefined) delete process.env.STRIPE_SECRET_KEY
+    else process.env.STRIPE_SECRET_KEY = originalStripe
+  }
+})

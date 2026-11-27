@@ -3,6 +3,7 @@ import { redirect } from 'next/navigation'
 import { db } from '@/lib/db'
 import { userSession } from '@/lib/auth'
 import { PlatformFeeForm } from './platform-fee'
+import { StripeSettingsForm } from './stripe-settings-form'
 import { admin, logout } from '../actions'
 import { Brand, ErrorNote, Field, brl } from '../ui'
 
@@ -30,15 +31,8 @@ export default async function SuperAdmin({ searchParams }: { searchParams: Promi
         {stripeSettings?.checkSucceeded && <p>{stripeSettings.paymentsEnabled ? 'Recebimentos habilitados' : 'Recebimentos indisponíveis'} · {stripeSettings.payoutsEnabled ? 'Repasses habilitados' : 'Repasses indisponíveis'}</p>}
         <p>Última notificação de assinatura · {billingEvent ? date(billingEvent.createdAt) : 'Nenhuma recebida'}</p>
         <p>Última notificação de pagamento · {connectEvent ? date(connectEvent.createdAt) : 'Nenhuma recebida'}</p>
-        <details><summary>Atualizar credenciais</summary>
-          <form action={admin.bind(null, 'stripe-config')}>
-            <label>Ambiente<select name="mode" defaultValue={stripeSettings?.mode ?? 'test'}><option value="test">Teste</option><option value="live">Produção</option></select></label>
-            <Field label="Chave pública" name="publishableKey" />
-            <Field label="Chave secreta" name="secret" type="password" />
-            <Field label="Segredo de cobrança da assinatura" name="billingWebhook" type="password" />
-            <Field label="Segredo de pagamentos dos estabelecimentos" name="connectWebhook" type="password" />
-            <Field label="Sua senha" name="password" type="password" /><button>Salvar configuração</button>
-          </form>
+        <details><summary>{stripeSettings ? 'Atualizar credenciais' : 'Configurar credenciais'}</summary>
+          <StripeSettingsForm mode={stripeSettings?.mode ?? 'test'} />
         </details>
         <details><summary>Verificar conexão</summary><form action={admin.bind(null, 'stripe-test')}>
           <Field label="Sua senha" name="password" type="password" /><button>Testar conexão</button>

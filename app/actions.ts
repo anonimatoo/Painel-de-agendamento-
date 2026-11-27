@@ -1,6 +1,7 @@
 'use server'
 
 import { redirect, unstable_rethrow } from 'next/navigation'
+import { revalidatePath } from 'next/cache'
 import { z } from 'zod'
 import { randomUUID } from 'node:crypto'
 import { commercialKinds, commercialLabels, type CommercialKind } from '@/lib/commercial-rules'
@@ -13,7 +14,8 @@ import { Prisma } from '@prisma/client'
 import { db } from '@/lib/db'
 import { endSession, hashPassword, membership, startSession, userSession, verifyPassword } from '@/lib/auth'
 import { AgendaError, blockSchedule, book, closeAppointment, dayBounds, localDateTime, rescheduleAppointment } from '@/lib/agenda'
-import { checkStripeConnection, pauseStripePayments, saveStripeConfiguration, stripeForNewPayments } from '@/lib/stripe-settings'
+import { checkStripeConnection, pauseStripePayments, saveStripeConfiguration, StripeSettingsError, stripeForNewPayments } from '@/lib/stripe-settings'
+import { stripeSettingsForm, type StripeSettingsFormState } from '@/lib/stripe-settings-form'
 import { officialCheckoutLink, subscriptionCheckout } from '@/lib/billing'
 import { instanceName, provisionWhatsApp, removeWhatsApp } from '@/lib/whatsapp'
 import { connectWhatsApp, logoutWhatsApp, sendWhatsApp, whatsAppStatus } from '@/lib/evolution'
@@ -424,13 +426,43 @@ export async function whatsappControl(_previous: { message?: string; qr?: string
   }
 }
 
-export async function admin(operation: 'plan' | 'suspend' | 'whatsapp' | 'stripe-config' | 'stripe-test' | 'stripe-pause' | 'platform-fee', form: FormData) {
+export async function saveStripeSettings(form: FormData): Promise<StripeSettingsFormState> {
+  try {
+    const user = await userSession()
+    if (!user?.platformAdmin || !user.adminMfaVerified) {
+      return { status: 'authorization', message: 'Entre como Super Admin e confirme a autenticação em duas etapas.' }
+    }
+    const input = stripeSettingsForm.safeParse(Object.fromEntries(form))
+    if (!input.success) {
+      const errors = z.flattenError(input.error).fieldErrors
+      return { status: 'validation', fields: {
+        mode: errors.mode?.[0], publishableKey: errors.publishableKey?.[0], secret: errors.secret?.[0],
+        billingWebhook: errors.billingWebhook?.[0], connectWebhook: errors.connectWebhook?.[0], password: errors.password?.[0]
+      } }
+    }
+    const { password, mode, publishableKey, ...stripeCredentials } = input.data
+    if (!(await allowAttempt('stripe-config', user.id, 6, 600))) {
+      return { status: 'authorization', message: 'Limite de tentativas atingido. Aguarde antes de tentar novamente.' }
+    }
+    if (!(await verifyPassword(password, user.password))) {
+      return { status: 'authorization', fields: { password: 'Não foi possível confirmar sua senha.' } }
+    }
+    await saveStripeConfiguration(user.id, mode, publishableKey, stripeCredentials)
+    revalidatePath('/super-admin')
+    return { status: 'saved', message: 'Conexão confirmada. Credenciais criptografadas e salvas.' }
+  } catch (error) {
+    if (error instanceof StripeSettingsError) return { status: error.kind, message: error.message }
+    return { status: 'persistence', message: 'Não foi possível acessar o banco de dados para salvar a configuração.' }
+  }
+}
+
+export async function admin(operation: 'plan' | 'suspend' | 'whatsapp' | 'stripe-test' | 'stripe-pause' | 'platform-fee', form: FormData) {
   await perform(async () => {
     const user = await userSession()
     if (!user?.platformAdmin) return '/login'
     if (!user.adminMfaVerified) return user.mfaSecret ? '/login' : '/conta'
     const body = Object.fromEntries(form)
-    if (operation === 'stripe-config' || operation === 'stripe-test' || operation === 'stripe-pause') {
+    if (operation === 'stripe-test' || operation === 'stripe-pause') {
       const password = credentials.shape.password.parse(form.get('password'))
       if (!(await allowAttempt('stripe-config', user.id, 6, 600)) || !(await verifyPassword(password, user.password))) {
         throw new AgendaError('Não foi possível confirmar sua senha.')
@@ -439,21 +471,8 @@ export async function admin(operation: 'plan' | 'suspend' | 'whatsapp' | 'stripe
         await checkStripeConnection(user.id)
         return '/super-admin?stripe=conectada'
       }
-      if (operation === 'stripe-pause') {
-        await pauseStripePayments(user.id, z.enum(['true', 'false']).parse(form.get('paused')) === 'true')
-        return '/super-admin'
-      }
-      const data = z.object({
-        mode: z.enum(['test', 'live']),
-        publishableKey: z.string().regex(/^pk_(?:test|live)_[A-Za-z0-9]+$/).max(300),
-        secret: z.string().regex(/^sk_(?:test|live)_[A-Za-z0-9]+$/).max(300),
-        billingWebhook: z.string().regex(/^whsec_[A-Za-z0-9]+$/).max(300),
-        connectWebhook: z.string().regex(/^whsec_[A-Za-z0-9]+$/).max(300)
-      }).parse(body)
-      await saveStripeConfiguration(user.id, data.mode, data.publishableKey, {
-        secret: data.secret, billingWebhook: data.billingWebhook, connectWebhook: data.connectWebhook
-      })
-      return '/super-admin?stripe=conectada'
+      await pauseStripePayments(user.id, z.enum(['true', 'false']).parse(form.get('paused')) === 'true')
+      return '/super-admin'
     }
     if (operation === 'platform-fee') {
       const values = z.object({

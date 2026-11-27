@@ -21,7 +21,7 @@ import { reconcileOrder, reserveOrder } from '@/lib/orders'
 import { changeConnectAvailability, connectStatus, startConnectOnboarding, openAppointmentCheckout, reconcileAppointment, refundAppointment, refundOrder } from '@/lib/connect'
 import { stripe } from '@/lib/stripe'
 import { allowAttempt, consumeAccountToken, mailConfigured, sendAccountLink } from '@/lib/account-security'
-import { finishMfaSetup, startMfaSetup, verifyMfa } from '@/lib/mfa'
+import { consumeMfaRecovery, finishMfaSetup, issueMfaRecovery, startMfaSetup, verifyMfa } from '@/lib/mfa'
 import { deleteMedia, storeMedia } from '@/lib/storage'
 
 const title = z.string().trim().min(2).max(100)
@@ -62,8 +62,9 @@ export async function account(action: 'login' | 'register', form: FormData) {
       const user = await db.user.findUnique({ where: { email: data.email } })
       if (!(await verifyPassword(data.password, user?.password)) || !user) throw new AgendaError('E-mail ou senha inválidos.')
       if (user.platformAdmin && user.mfaSecret) {
-        const code = z.string().trim().max(6).parse(form.get('code') ?? '')
-        if (!(await verifyMfa(user, code))) throw new AgendaError('Informe um código válido do seu aplicativo autenticador.')
+        const code = z.string().trim().max(27).parse(form.get('code') ?? '')
+        const valid = /^\d{6}$/.test(code) ? await verifyMfa(user, code) : await consumeMfaRecovery(user, code)
+        if (!valid) throw new AgendaError('Informe um código válido do aplicativo ou um código de recuperação disponível.')
         await startSession(user.id, true)
         return '/super-admin'
       }
@@ -122,29 +123,53 @@ export async function accountLink(operation: 'request' | 'reset' | 'resend' | 'v
   }, '/conta')
 }
 
-export async function setupMfa(_previous: { message?: string; secret?: string }, form: FormData): Promise<{ message?: string; secret?: string }> {
+type SetupMfaState = { message?: string; secret?: string; challenge?: string; qr?: string }
+type RecoveryMfaState = { message?: string; codes?: string[] }
+
+export async function setupMfa(form: FormData): Promise<SetupMfaState> {
+  const failure = (message: string) => ({ message })
   try {
     const user = await userSession()
-    if (!user?.platformAdmin || user.mfaSecret || !(await allowAttempt('mfa-setup', user.id, 8, 600))) {
-      return { message: 'Esta operação está indisponível agora.' }
-    }
-    const password = credentials.shape.password.parse(form.get('password'))
-    if (!(await verifyPassword(password, user.password))) return { message: 'Não foi possível confirmar sua senha.' }
-    return { secret: await startMfaSetup(user.id) }
+    if (!user?.platformAdmin || user.mfaSecret) return { message: 'Esta operação está indisponível agora.' }
+    if (!(await allowAttempt('mfa-setup', user.id, 8, 600))) return failure('Aguarde antes de tentar novamente.')
+    const password = credentials.shape.password.safeParse(form.get('password'))
+    if (!password.success || !(await verifyPassword(password.data, user.password))) return failure('Não foi possível confirmar sua senha.')
+    const setup = await startMfaSetup(user)
+    return setup ?? { message: 'Esta operação está indisponível agora.' }
   } catch {
-    return { message: 'Não foi possível iniciar a autenticação em duas etapas.' }
+    return failure('Não foi possível iniciar a autenticação em duas etapas.')
   }
 }
 
-export async function activateMfa(form: FormData) {
-  await perform(async () => {
+export async function activateMfa(_previous: RecoveryMfaState, form: FormData): Promise<RecoveryMfaState> {
+  try {
     const user = await userSession()
-    if (!user?.platformAdmin || user.mfaSecret || !(await allowAttempt('mfa-activate', user.id, 10, 600))) return '/conta'
-    const code = z.string().trim().regex(/^\d{6}$/).parse(form.get('code'))
-    if (!(await finishMfaSetup(user.id, code))) throw new AgendaError('Confira o código ou gere uma nova chave.')
+    if (!user?.platformAdmin || user.mfaSecret || !(await allowAttempt('mfa-activate', user.id, 10, 600))) {
+      return { message: 'Esta operação está indisponível agora.' }
+    }
+    const input = z.object({ code: z.string().trim().regex(/^\d{6}$/), challenge: z.uuid() }).safeParse(Object.fromEntries(form))
+    if (!input.success) return { message: 'Informe os seis dígitos exibidos no aplicativo.' }
+    const codes = await finishMfaSetup(user, input.data.code, input.data.challenge)
+    if (!codes) return { message: 'Confira o código ou gere uma nova chave.' }
     await startSession(user.id, true)
-    return '/super-admin'
-  }, '/conta')
+    return { codes }
+  } catch {
+    return { message: 'Não foi possível concluir a configuração. Entre novamente para verificar o estado da conta.' }
+  }
+}
+
+export async function generateMfaRecovery(_previous: RecoveryMfaState, form: FormData): Promise<RecoveryMfaState> {
+  try {
+    const user = await userSession()
+    if (!user?.platformAdmin || !user.adminMfaVerified || user.mfaRecoveryIssuedAt ||
+        !(await allowAttempt('mfa-recovery', user.id, 8, 600))) return { message: 'Esta operação está indisponível agora.' }
+    const password = credentials.shape.password.safeParse(form.get('password'))
+    if (!password.success || !(await verifyPassword(password.data, user.password))) return { message: 'Não foi possível confirmar sua senha.' }
+    const codes = await issueMfaRecovery(user)
+    return codes ? { codes } : { message: 'Os códigos de recuperação já foram emitidos.' }
+  } catch {
+    return { message: 'Não foi possível gerar os códigos de recuperação.' }
+  }
 }
 
 export async function logout() {

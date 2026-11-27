@@ -27,6 +27,9 @@ model User {
   emailVerifiedAt DateTime?
   mfaSecret String?
   mfaCounter Int?
+  mfaPending String?
+  mfaRecoveryIssuedAt DateTime?
+  mfaRecoveryHashes String[] @default([])
   accountTokens AccountToken[]
   sessions Session[]
   memberships Member[]

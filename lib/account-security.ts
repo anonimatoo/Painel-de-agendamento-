@@ -37,7 +37,7 @@ export async function consumeAccountToken(token: string, purpose: TokenPurpose, 
   return db.$transaction(async tx => {
     const removed = await tx.accountToken.deleteMany({ where: { tokenHash, purpose, expiresAt: { gt: new Date() } } })
     if (!removed.count) return false
-    await tx.user.update({ where: { id: record.userId }, data: hashed ? { password: hashed } : { emailVerifiedAt: new Date() } })
+    await tx.user.update({ where: { id: record.userId }, data: hashed ? { password: hashed, mfaPending: null } : { emailVerifiedAt: new Date() } })
     if (hashed) await tx.session.deleteMany({ where: { userId: record.userId } })
     return true
   })

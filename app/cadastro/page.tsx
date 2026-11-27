@@ -1,14 +1,18 @@
 import Link from 'next/link'
-import { account } from '../actions'
-import { Brand, ErrorNote, Field } from '../ui'
+import { enabledSocialProviders } from '@/lib/social-auth'
+import { SocialButtons } from '../social-buttons'
+import { Brand, ErrorNote } from '../ui'
+import { RegisterForm } from './register-form'
 
 export default async function Register({ searchParams }: { searchParams: Promise<{ erro?: string }> }) {
-  return <div className="site"><header><Brand /></header><main className="center"><article>
-    <h1>Criar conta</h1><ErrorNote error={(await searchParams).erro} />
-    <form action={account.bind(null, 'register')}>
-      <Field label="Nome do estabelecimento" name="business" />
-      <Field label="Endereço da página (ex. studio-clara)" name="link" />
-      <Field label="E-mail" name="email" type="email" /><Field label="Senha (mínimo 12 caracteres)" name="password" type="password" /><button>Criar conta</button>
-    </form><p><Link href="/login">Já tenho conta</Link></p>
+  const [query, providers] = await Promise.all([searchParams, enabledSocialProviders()])
+  return <div className="site"><header><Brand /></header><main className="center auth-center"><article>
+    <h1>Criar conta</h1>
+    <p>Crie a agenda do seu estabelecimento. O endereço da sua página é gerado automaticamente.</p>
+    <ErrorNote error={query.erro} />
+    <SocialButtons providers={providers} />
+    {providers.length > 0 && <p className="auth-divider">ou cadastre-se com e-mail</p>}
+    <RegisterForm />
+    <p><Link href="/login">Já tenho conta</Link></p>
   </article></main></div>
 }

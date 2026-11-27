@@ -104,3 +104,17 @@ Em **WhatsApp**, os modelos podem ser editados por evento. Aniversário e retorn
 ### Diagnóstico sem transações reais
 
 O painel testa o banco, consulta a Stripe, lê o histórico dos webhooks, consulta instâncias da Evolution e verifica o bucket S3. Redis e worker usam um sinal recente gravado após a consulta real à fila. O teste do Resend consulta domínios. Uma chave com permissão apenas de envio exigirá homologação pelo envio de teste autorizado. As verificações de disponibilidade não certificam a entrega de mensagens ou o fluxo completo de pagamento.
+
+## Provedores de autenticação
+
+Aplique a migration `202611270032_social_auth` antes de iniciar a versão. As senhas existentes permanecem válidas. O cadastro social cria usuários sem senha local.
+
+1. No Super Admin, abra **Provedores de autenticação**. Registre no console do provedor a URL de callback gerada a partir de `APP_URL`.
+2. Para Google, use credenciais OAuth de aplicativo Web. Para Apple, configure um Services ID com o domínio e retorno HTTPS públicos registrados, além de Team ID, Key ID e chave privada PKCS#8.
+3. Salve as credenciais e teste a configuração. O teste faz uma troca com código descartável inválido. Um retorno `invalid_grant` é um sinal preliminar. A homologação exige efetuar um login real e validar o retorno no domínio registrado.
+4. Ative o provedor. Os botões aparecem no login e no cadastro. Para vincular um provedor a uma conta já existente, entre pelo método atual, abra **Sua conta** e confirme a senha. Contas exclusivamente sociais podem vincular outro provedor nos cinco minutos após um novo login.
+5. Confira cadastro, retorno, cancelamento, repetição do login e vinculação nas contas de teste. Na Apple, valide o POST cross-site e o e-mail privado. No Google, valide a tela de consentimento e um retorno com PKCE. Use ambientes e credenciais separados.
+
+Os segredos dos provedores ficam sob a chave `CREDENTIAL_ENCRYPTION_KEY` já usada pela aplicação. O login social nunca associa uma conta existente somente por coincidência de e-mail. Super Admin continua entrando exclusivamente pelo fluxo de senha e segundo fator.
+
+[Google OpenID Connect](https://developers.google.com/identity/openid-connect/openid-connect) · [Apple Sign in REST API](https://developer.apple.com/documentation/signinwithapplerestapi)

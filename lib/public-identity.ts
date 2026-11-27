@@ -20,3 +20,23 @@ export async function changePublicAddress(tenantId: string, slug: string) {
     await tx.tenant.update({ where: { id: tenantId }, data: { slug } })
   })
 }
+
+export function publicSlug(name: string) {
+  return name.normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60).replace(/-+$/, '')
+}
+
+export async function allocatePublicSlug(tx: Prisma.TransactionClient, name: string) {
+  const normalized = publicSlug(name)
+  const base = normalized.length >= 3 ? normalized : normalized ? 'agenda-' + normalized : 'agenda'
+  // Existing address changes and new registrations share the same transaction lock.
+  for (let attempt = 1; attempt <= 64; attempt++) {
+    const suffix = attempt === 1 ? '' : '-' + attempt
+    const slug = base.slice(0, 60 - suffix.length).replace(/-+$/, '') + suffix
+    await lockPublicAddress(tx, slug)
+    if (await tx.tenant.findUnique({ where: { slug }, select: { id: true } })) continue
+    if (await tx.tenantAlias.findUnique({ where: { slug }, select: { slug: true } })) continue
+    return slug
+  }
+  throw new AgendaError('Escolha outro nome para o estabelecimento.')
+}

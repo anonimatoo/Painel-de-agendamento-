@@ -22,7 +22,7 @@ enum Status {
 model User {
   id String @id @default(cuid())
   email String @unique
-  password String
+  password String?
   platformAdmin Boolean @default(false)
   emailVerifiedAt DateTime?
   mfaSecret String?
@@ -30,6 +30,7 @@ model User {
   mfaPending String?
   mfaRecoveryIssuedAt DateTime?
   mfaRecoveryHashes String[] @default([])
+  socialIdentities SocialIdentity[]
   accountTokens AccountToken[]
   sessions Session[]
   memberships Member[]
@@ -583,4 +584,30 @@ model TenantAlias {
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   createdAt DateTime @default(now())
   @@index([tenantId])
+}
+
+model SocialIdentity {
+  provider String
+  subject String
+  userId String
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  @@id([provider, subject])
+  @@unique([userId, provider])
+}
+
+model SocialProviderSettings {
+  provider String @id
+  encrypted String
+  enabled Boolean @default(false)
+  revision String
+}
+
+model SocialAttempt {
+  stateHash String @id
+  browserHash String
+  provider String
+  encrypted String
+  expiresAt DateTime
+  @@index([expiresAt])
 }

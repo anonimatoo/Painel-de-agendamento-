@@ -4,7 +4,7 @@ import { db } from './db'
 import { acceptedMfaCounter, mfaQr } from './mfa-totp'
 import { seal, unseal } from './secrets'
 
-type Credentials = { id: string; password: string }
+type Credentials = { id: string; password: string | null }
 type PendingSetup = { secret: string; challenge: string; expires: number }
 
 const recoveryHash = (code: string) => createHash('sha256').update(code).digest('hex')
@@ -55,7 +55,7 @@ export async function issueMfaRecovery(user: Credentials & { mfaSecret: string |
   return changed.count === 1 ? batch.codes : null
 }
 
-export async function verifyMfa(user: { id: string; mfaSecret: string | null; password?: string }, code: string, now = Date.now()) {
+export async function verifyMfa(user: { id: string; mfaSecret: string | null; password?: string | null }, code: string, now = Date.now()) {
   if (!user.mfaSecret) return false
   const secret = unseal(user.mfaSecret, 'mfa:' + user.id)
   const counter = acceptedMfaCounter(secret, code, now)

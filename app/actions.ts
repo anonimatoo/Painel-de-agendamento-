@@ -7,12 +7,12 @@ import { randomUUID } from 'node:crypto'
 import { commercialKinds, commercialLabels, type CommercialKind } from '@/lib/commercial-rules'
 import { enqueueCommercial } from '@/lib/commercial-notices'
 import { can, permissionKeys, type Permission } from '@/lib/permissions'
-import { changePublicAddress, lockPublicAddress } from '@/lib/public-identity'
+import { changePublicAddress } from '@/lib/public-identity'
 import { DateTime } from 'luxon'
 import { changeStock, reverseSale } from '@/lib/commerce'
 import { Prisma } from '@prisma/client'
 import { db } from '@/lib/db'
-import { endSession, hashPassword, membership, startSession, userSession, verifyPassword } from '@/lib/auth'
+import { endSession, membership, startSession, userSession, verifyPassword } from '@/lib/auth'
 import { AgendaError, blockSchedule, book, closeAppointment, dayBounds, localDateTime, rescheduleAppointment } from '@/lib/agenda'
 import { checkStripeConnection, pauseStripePayments, saveStripeConfiguration, StripeSettingsError, stripeForNewPayments } from '@/lib/stripe-settings'
 import { stripeSettingsForm, type StripeSettingsFormState } from '@/lib/stripe-settings-form'
@@ -54,43 +54,24 @@ async function perform(operation: () => Promise<string>, fallback: string) {
   redirect(target)
 }
 
-export async function account(action: 'login' | 'register', form: FormData) {
+export async function account(form: FormData) {
   await perform(async () => {
     const data = credentials.parse(Object.fromEntries(form))
-    if (!(await allowAttempt(action, data.email, action === 'login' ? 10 : 5, 600))) {
+    if (!(await allowAttempt('login', data.email, 10, 600))) {
       throw new AgendaError('Aguarde alguns minutos antes de tentar novamente.')
     }
-    if (action === 'login') {
-      const user = await db.user.findUnique({ where: { email: data.email } })
-      if (!(await verifyPassword(data.password, user?.password)) || !user) throw new AgendaError('E-mail ou senha inválidos.')
-      if (user.platformAdmin && user.mfaSecret) {
-        const code = z.string().trim().max(27).parse(form.get('code') ?? '')
-        const valid = /^\d{6}$/.test(code) ? await verifyMfa(user, code) : await consumeMfaRecovery(user, code)
-        if (!valid) throw new AgendaError('Informe um código válido do aplicativo ou um código de recuperação disponível.')
-        await startSession(user.id, true)
-        return '/super-admin'
-      }
-      await startSession(user.id)
-      return user.platformAdmin ? '/conta' : '/dashboard'
+    const user = await db.user.findUnique({ where: { email: data.email } })
+    if (!(await verifyPassword(data.password, user?.password)) || !user) throw new AgendaError('E-mail ou senha inválidos.')
+    if (user.platformAdmin && user.mfaSecret) {
+      const code = z.string().trim().max(27).parse(form.get('code') ?? '')
+      const valid = /^\d{6}$/.test(code) ? await verifyMfa(user, code) : await consumeMfaRecovery(user, code)
+      if (!valid) throw new AgendaError('Informe um código válido do aplicativo ou um código de recuperação disponível.')
+      await startSession(user.id, true)
+      return '/super-admin'
     }
-    const { business, link } = z.object({ business: title, link: slug }).parse(Object.fromEntries(form))
-    const password = await hashPassword(data.password)
-    const user = await db.$transaction(async tx => {
-      await lockPublicAddress(tx, link)
-      if (await tx.tenantAlias.findUnique({ where: { slug: link } })) throw new AgendaError('Este endereço público já está em uso.')
-      const created = await tx.user.create({ data: {
-        email: data.email, password,
-        memberships: { create: { role: 'ADMIN', tenant: { create: { name: business, slug: link } } } }
-      }, include: { memberships: { select: { tenantId: true } } } })
-      for (const kind of ['REGISTERED', 'WELCOME'] as const) await enqueueCommercial(tx, {
-        tenantId: created.memberships[0].tenantId, kind, reference: created.id
-      })
-      return created
-    })
     await startSession(user.id)
-    if (mailConfigured()) await sendAccountLink(user, 'EMAIL_VERIFY').catch(() => console.error('email-verification-delivery'))
-    return '/dashboard'
-  }, action === 'login' ? '/login' : '/cadastro')
+    return user.platformAdmin ? '/conta' : '/dashboard'
+  }, '/login')
 }
 
 export async function accountLink(operation: 'request' | 'reset' | 'resend' | 'verify' | 'revoke', form: FormData) {
@@ -99,7 +80,7 @@ export async function accountLink(operation: 'request' | 'reset' | 'resend' | 'v
       const email = credentials.shape.email.parse(form.get('email'))
       if (await allowAttempt('password-reset', email, 3, 1800)) {
         const user = await db.user.findUnique({ where: { email } })
-        if (user && mailConfigured()) await sendAccountLink(user, 'PASSWORD_RESET').catch(() => console.error('password-reset-delivery'))
+        if (user?.password && mailConfigured()) await sendAccountLink(user, 'PASSWORD_RESET').catch(() => console.error('password-reset-delivery'))
       }
       return '/conta?solicitado=1'
     }

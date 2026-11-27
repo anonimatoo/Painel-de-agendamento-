@@ -2,6 +2,8 @@ import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { db } from '@/lib/db'
 import { userSession } from '@/lib/auth'
+import { callbackUrl, socialProviders } from '@/lib/social-oidc'
+import { SocialProviderForm } from './social-provider-form'
 import { PlatformFeeForm } from './platform-fee'
 import { StripeSettingsForm } from './stripe-settings-form'
 import { admin, logout } from '../actions'
@@ -13,13 +15,14 @@ export default async function SuperAdmin({ searchParams }: { searchParams: Promi
   if (!user.adminMfaVerified) redirect(user.mfaSecret ? '/login' : '/conta')
   const query = await searchParams
   const date = (value: Date) => new Intl.DateTimeFormat('pt-BR', { timeZone: 'America/Sao_Paulo', dateStyle: 'short', timeStyle: 'short' }).format(value)
-  const [tenants, plans, stripeSettings, billingEvent, connectEvent, changes] = await Promise.all([
+  const [tenants, plans, stripeSettings, billingEvent, connectEvent, changes, providerSettings] = await Promise.all([
     db.tenant.findMany({ orderBy: { createdAt: 'desc' }, take: 100, include: { subscriptions: { include: { plan: true } } } }),
     db.plan.findMany({ orderBy: { monthlyCents: 'asc' } }),
     db.stripeSettings.findUnique({ where: { id: 1 }, select: { mode: true, paused: true, checkedAt: true, checkSucceeded: true, paymentsEnabled: true, payoutsEnabled: true } }),
     db.webhookEvent.findFirst({ where: { source: 'billing' }, orderBy: { createdAt: 'desc' }, select: { createdAt: true } }),
     db.webhookEvent.findFirst({ where: { source: 'connect' }, orderBy: { createdAt: 'desc' }, select: { createdAt: true } }),
-    db.adminAudit.findMany({ where: { action: { startsWith: 'STRIPE_' } }, orderBy: { createdAt: 'desc' }, take: 15, select: { action: true, createdAt: true } })
+    db.adminAudit.findMany({ where: { action: { startsWith: 'STRIPE_' } }, orderBy: { createdAt: 'desc' }, take: 15, select: { action: true, createdAt: true } }),
+    db.socialProviderSettings.findMany({ select: { provider: true, enabled: true } })
   ])
   return <div className="shell"><aside><Brand /><nav><Link href="/super-admin">Administração</Link><a href="#assinantes">Assinantes</a><a href="#planos">Planos</a><Link href="/conciliacao">Movimentações Stripe</Link><Link href="/comunicacao">Comunicação</Link><Link href="/diagnostico">Diagnóstico</Link><Link href="/conta">Minha conta</Link></nav><form action={logout}><button className="subtle">Sair</button></form></aside>
     <main className="content"><h1>Administração da plataforma</h1><ErrorNote error={query.erro} />
@@ -47,6 +50,12 @@ export default async function SuperAdmin({ searchParams }: { searchParams: Promi
         {changes.length > 0 && <details><summary>Histórico da configuração</summary><ul>{changes.map((change, index) => <li key={index}>
           {date(change.createdAt)} · {({ STRIPE_CONFIG_UPDATED: 'Credenciais atualizadas', STRIPE_CHECK_OK: 'Conexão verificada', STRIPE_CHECK_FAILED: 'Falha na verificação', STRIPE_PAUSED: 'Novas cobranças desconectadas', STRIPE_RESUMED: 'Novas cobranças reconectadas' } as Record<string,string>)[change.action] ?? 'Alteração registrada'}
         </li>)}</ul></details>}
+      </article>
+      <article><h2>Provedores de autenticação</h2>
+        <div className="social-settings-grid">{socialProviders.map(provider => {
+          const config = providerSettings.find(item => item.provider === provider)
+          return <SocialProviderForm key={provider} provider={provider} callback={callbackUrl(provider)} configured={Boolean(config)} enabled={Boolean(config?.enabled)} />
+        })}</div>
       </article>
       <article id="assinantes"><h2>Assinantes</h2>{!tenants.length ? <p>Nenhum estabelecimento cadastrado.</p> : <div className="scroll"><table>
         <thead><tr><th>Estabelecimento</th><th>Acesso</th><th>Assinaturas</th><th>Ação</th><th>WhatsApp</th></tr></thead>

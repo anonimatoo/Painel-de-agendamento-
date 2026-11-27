@@ -45,9 +45,9 @@ function location(response: Response) {
 
 async function main() {
   const registration = await submit('/cadastro', 'Criar conta', {
-    business: 'Estúdio do teste', link, email, password
+    business: link, email, password
   })
-  assert.equal(location(registration), '/dashboard')
+  assert.equal(location(registration), '/primeiro-acesso?novo=1')
   cookie = registration.headers.get('set-cookie')?.split(';')[0] ?? ''
   assert.match(cookie, /^agenda_session=/)
   const initial = await get('/dashboard')

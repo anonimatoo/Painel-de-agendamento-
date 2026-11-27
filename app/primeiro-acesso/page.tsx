@@ -6,7 +6,7 @@ import { connectStatus } from '@/lib/connect'
 import { whatsAppStatus } from '@/lib/evolution'
 import { Brand } from '../ui'
 
-export default async function FirstAccess() {
+export default async function FirstAccess({ searchParams }: { searchParams: Promise<{ novo?: string }> }) {
   const user = await userSession()
   if (!user) redirect('/login')
   const member = await membership(user.id)
@@ -34,6 +34,12 @@ export default async function FirstAccess() {
   ] as const
   return <div className="site"><header><Brand /><Link href="/dashboard">Voltar ao painel</Link></header><main className="content">
     <h1>Primeiro acesso</h1>
+    {(await searchParams).novo === '1' && <article>
+      <h2>Agenda criada para {tenant.name}</h2>
+      <p role="status">Seu endereço público é <strong>/estabelecimento/{tenant.slug}</strong>.</p>
+      <p>Escolha seu plano e, em seguida, cadastre os serviços e horários para começar a receber agendamentos.</p>
+      <Link className="button" href="/dashboard">Abrir meu painel</Link>
+    </article>}
     {!available && <article><p>Ative a assinatura para configurar o estabelecimento e receber reservas.</p><Link href="/dashboard">Ver assinatura</Link></article>}
     <article><h2>Preparar a agenda</h2>
       <p>O progresso acompanha as configurações salvas. Você pode voltar a qualquer momento.</p>

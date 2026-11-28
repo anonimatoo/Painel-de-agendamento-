@@ -1,10 +1,10 @@
-import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import type Stripe from 'stripe'
 import { membership, userSession } from '@/lib/auth'
 import { stripe } from '@/lib/stripe'
 import { manage } from '../actions'
-import { Brand, brl } from '../ui'
+import { MerchantShell } from '../merchant-shell'
+import { brl } from '../ui'
 
 const invoiceStatus: Record<string, string> = {
   paid: 'Paga', open: 'Em aberto', draft: 'Em preparação', uncollectible: 'Não recebida', void: 'Cancelada'
@@ -25,8 +25,7 @@ export default async function BillingPage() {
       unavailable = true
     }
   }
-  return <div className="site"><header><Brand /><Link href="/dashboard">Voltar ao painel</Link></header>
-    <main className="content"><article>
+  return <MerchantShell member={member} current="/assinatura"><article>
       <h1>Faturas da assinatura</h1>
       {unavailable ? <p role="alert">Não foi possível consultar as faturas agora.</p>
         : invoices.length ? <div className="scroll"><table>
@@ -39,6 +38,5 @@ export default async function BillingPage() {
           </tr>)}</tbody>
         </table></div> : <p>Nenhuma fatura disponível.</p>}
       {customer && <form action={manage.bind(null, 'portal')}><button>Gerenciar assinatura</button></form>}
-    </article></main>
-  </div>
+    </article></MerchantShell>
 }

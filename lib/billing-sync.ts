@@ -16,10 +16,12 @@ export async function updateInvoice(tx: Prisma.TransactionClient, tenantId: stri
 
 export async function updateSubscription(tx: Prisma.TransactionClient, tenantId: string, subscription: Stripe.Subscription) {
   const prices = subscription.items.data.map(item => item.price.id)
-  const plan = await tx.plan.findFirst({ where: { OR: [{ monthlyPriceId: { in: prices } }, { annualPriceId: { in: prices } }] } })
+  const plan = await tx.plan.findFirst({ where: { OR: [{ monthlyPriceId: { in: prices } }, { annualPriceId: { in: prices } }, { priceHistory: { some: { priceId: { in: prices } } } }] } })
   if (plan) {
     await enqueueSubscriptionNotices(tx, tenantId, subscription, plan.name)
-    const items = subscription.items.data.filter(item => item.price.id === plan.monthlyPriceId || item.price.id === plan.annualPriceId)
+    const previousPrices = await tx.planPriceHistory.findMany({ where: { planId: plan.id, priceId: { in: prices } }, select: { priceId: true } })
+    const recognizedPrices = new Set([plan.monthlyPriceId, plan.annualPriceId, ...previousPrices.map(row => row.priceId)])
+    const items = subscription.items.data.filter(item => recognizedPrices.has(item.price.id))
     const item = items.length === 1 ? items[0] : null
     const interval = item?.price.recurring?.interval
     const unit = item?.price.unit_amount

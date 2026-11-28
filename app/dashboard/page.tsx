@@ -22,6 +22,7 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
   const member = await membership(user.id)
   if (!member) redirect(user.platformAdmin ? '/super-admin' : '/')
   const { tenant, role } = member
+  const shiftTime = (value: number) => String(Math.floor(value / 60)).padStart(2, '0') + ':' + String(value % 60).padStart(2, '0')
   const own = role === 'PROFESSIONAL' && can(member, 'agenda.read') ? member.professionalId : null
   const enabled = tenant.active && !tenant.suspended
   const desk = role !== 'PROFESSIONAL' && can(member, 'agenda.read')
@@ -99,7 +100,21 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
           {services.length > 0 && <ul>{services.map(s => <li key={s.id}>{s.name} · {brl(s.cents)} · {s.duration} min</li>)}</ul>}
         </article></details>}
         {show('profissionais') && <article id="profissionais"><h2>Profissionais</h2><form action={manage.bind(null, 'professional')}><input type="hidden" name="dashboardSection" value={section ?? ''} /><Field label="Nome" name="name" /><button>Adicionar profissional</button></form>
-          {professionals.length > 0 && <ul>{professionals.map(p => <li key={p.id}>{p.name} · {p.assignments.map(a => a.service.name).join(', ') || 'Sem serviços'} · {p.hours.length} turnos</li>)}</ul>}
+          {professionals.length > 0 && <ul>{professionals.map(p => <li key={p.id}><details><summary>{p.name} · {p.active ? 'Ativo' : 'Inativo'} · {p.assignments.map(a => a.service.name).join(', ') || 'Sem serviços'} · {p.hours.length} turnos</summary>
+            <form className="inline" action={manage.bind(null, 'professional-edit')}>
+              <input type="hidden" name="dashboardSection" value={section ?? ''} /><input type="hidden" name="id" value={p.id} />
+              <Field label="Nome" name="name" value={p.name} /><label>Situação<select name="active" defaultValue={String(p.active)}><option value="true">Ativo</option><option value="false">Inativo</option></select></label><button>Salvar profissional</button>
+            </form>
+            {p.hours.map(shift => <details key={shift.id}><summary>{weekdays[shift.weekday - 1]} · {shiftTime(shift.startMinute)}–{shiftTime(shift.endMinute)}</summary>
+              <form className="inline" action={manage.bind(null, 'hours-edit')}>
+                <input type="hidden" name="dashboardSection" value={section ?? ''} /><input type="hidden" name="id" value={shift.id} /><input type="hidden" name="professionalId" value={p.id} />
+                <label>Dia<select name="weekday" defaultValue={shift.weekday}>{weekdays.map((day, index) => <option key={day} value={index + 1}>{day}</option>)}</select></label>
+                <Field label="Início" name="startMinute" type="time" value={shiftTime(shift.startMinute)} /><Field label="Fim" name="endMinute" type="time" value={shiftTime(shift.endMinute)} />
+                <button>Salvar turno</button>
+              </form>
+              <form action={manage.bind(null, 'hours-remove')}><input type="hidden" name="dashboardSection" value={section ?? ''} /><input type="hidden" name="id" value={shift.id} /><input type="hidden" name="professionalId" value={p.id} /><button className="outline">Remover turno</button></form>
+            </details>)}
+          </details></li>)}</ul>}
           {!!(professionals.length && services.length) && <form action={manage.bind(null, 'assignment')}>
             <input type="hidden" name="dashboardSection" value={section ?? ''} />
             <label>Profissional<select name="professionalId">{professionals.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select></label>
@@ -124,7 +139,7 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
           <button>Salvar configurações gerais</button>
         </form>
       </article>}
-      {show('configuracoes') && <article><h2>Alterações pelo cliente</h2><p>Defina a antecedência mínima para cancelamento ou reagendamento pelo portal. Deixe em branco para desativar.</p><form className="inline" action={updateConsumerNotice}><Field label="Antecedência em horas" name="hours" type="number" min={0} max={168} required={false} value={tenant.consumerNoticeHours ?? ''} /><button className="outline">Salvar política</button></form></article>}
+      {show('configuracoes') && <article><h2>Alterações pelo cliente</h2><p>Defina a antecedência mínima para cancelamento ou reagendamento pelo portal. Deixe em branco para desativar.</p><form className="inline" action={updateConsumerNotice}><Field label="Antecedência em horas" name="hours" type="number" min={0} max={168} required={false} value={tenant.consumerNoticeHours ?? ''} />{role === 'ADMIN' && <label className="check"><input type="checkbox" name="automaticAppointmentRefunds" defaultChecked={tenant.automaticAppointmentRefunds} /> Cancelar e solicitar estorno integral automaticamente quando elegível</label>}<button className="outline">Salvar política</button></form></article>}
       {show('configuracoes') && role === 'ADMIN' && <article id="configuracoes"><h2>Configurações</h2><Link href="/recebimentos">Receber pagamentos</Link><Link href="/personalizacao">Personalizar página pública</Link>
         <form action={manage.bind(null, 'settings')}>
         <input type="hidden" name="dashboardSection" value={section ?? ''} />

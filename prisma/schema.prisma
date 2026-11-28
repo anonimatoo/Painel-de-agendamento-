@@ -103,6 +103,7 @@ model Tenant {
   customers Customer[]
   consumerProfiles ConsumerProfile[]
   consumerNoticeHours Int?
+  automaticAppointmentRefunds Boolean @default(false)
   products Product[]
   catalogCategories CatalogCategory[]
   financialEntries FinancialEntry[]
@@ -296,6 +297,8 @@ model Appointment {
   paymentToken String? @unique
   reminders Reminder[]
   history AppointmentHistory[]
+  refundRequest AppointmentRefundRequest?
+  connectedRefunds ConnectedRefund[]
   createdAt DateTime @default(now())
   @@index([tenantId, startsAt])
   @@index([tenantId, consumerUserId, startsAt])
@@ -313,6 +316,7 @@ model Plan {
   annualPriceId String @unique
   active Boolean @default(true)
   subscriptions Subscription[]
+  priceHistory PlanPriceHistory[]
 }
 model Subscription {
   id String @id
@@ -442,9 +446,14 @@ model WaitEntry {
   name String
   phone String
   closedAt DateTime?
+  notificationConsentAt DateTime?
+  notificationState String @default("QUEUED")
+  notificationCheckedAt DateTime?
+  notificationReference String?
   createdAt DateTime @default(now())
   @@unique([tenantId, professionalId, serviceId, day, phone])
   @@index([tenantId, day])
+  @@index([notificationState, day, notificationCheckedAt])
 }
 
 enum MediaKind {
@@ -498,6 +507,7 @@ model ShopOrder {
   refundedAt DateTime?
   createdAt DateTime @default(now())
   items ShopOrderItem[]
+  connectedRefunds ConnectedRefund[]
   @@unique([tenantId, requestId])
   @@unique([tenantId, id])
   @@index([status, expiresAt])
@@ -666,4 +676,50 @@ model ConsumerProfile {
 
   @@id([tenantId, userId])
   @@index([userId])
+}
+
+model PlanPriceHistory {
+  priceId String @id
+  planId String
+  plan Plan @relation(fields: [planId], references: [id], onDelete: Restrict)
+
+  @@index([planId])
+}
+
+model AppointmentRefundRequest {
+  appointmentId String @id
+  appointment Appointment @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+  accountId String
+  paymentIntentId String
+  amount Int
+  includeFee Boolean
+  createdAt DateTime @default(now())
+  retryAt DateTime @default(now())
+  stripeRefundId String? @unique
+  state String @default("QUEUED")
+
+  @@index([state, retryAt])
+}
+
+model ConnectedRefund {
+  id String
+  accountId String
+  appointmentId String?
+  appointment Appointment? @relation(fields: [appointmentId], references: [id], onDelete: Restrict)
+  orderId String?
+  order ShopOrder? @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  amount Int
+  state String
+  succeededAt DateTime?
+
+  @@id([accountId, id])
+  @@index([appointmentId, succeededAt])
+  @@index([orderId, succeededAt])
+}
+
+model MailSetting {
+  id Int @id
+  sender String
+  encryptedKey String
+  updatedAt DateTime @updatedAt
 }

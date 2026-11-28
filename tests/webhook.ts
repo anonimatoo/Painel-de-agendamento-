@@ -11,6 +11,10 @@ async function main() {
   const signature = Stripe.webhooks.generateTestHeaderString({ payload, secret })
   const url = new URL('/api/stripe/billing', process.env.APP_URL ?? 'http://localhost:3000')
   try {
+    const invalid = Stripe.webhooks.generateTestHeaderString({ payload, secret: 'whsec_other_fixture' })
+    assert.equal((await fetch(url, { method: 'POST', headers: { 'stripe-signature': invalid }, body: payload })).status, 400)
+    assert.equal(await db.webhookEvent.count({ where: { id } }), 0)
+    assert.equal((await fetch(url, { method: 'POST', headers: { 'stripe-signature': signature }, body: ' '.repeat(1_048_577) })).status, 413)
     for (let index = 0; index < 2; index++) {
       const response = await fetch(url, { method: 'POST', headers: { 'stripe-signature': signature }, body: payload })
       assert.equal(response.status, 200)
@@ -20,7 +24,7 @@ async function main() {
     const thinSignature = Stripe.webhooks.generateTestHeaderString({ payload: thin, secret })
     const rejected = await fetch(url, { method: 'POST', headers: { 'stripe-signature': thinSignature }, body: thin })
     assert.equal(rejected.status, 400)
-    console.log('O endpoint snapshot deduplicou o evento assinado e rejeitou o evento thin.')
+    console.log('O endpoint snapshot deduplicou o evento assinado, rejeitou assinatura inválida e thin event e limitou o tamanho do corpo.')
   } finally {
     await db.webhookEvent.deleteMany({ where: { id } })
     await db.$disconnect()

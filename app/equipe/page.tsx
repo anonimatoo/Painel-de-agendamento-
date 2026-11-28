@@ -1,10 +1,10 @@
-import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { membership, userSession } from '@/lib/auth'
 import { db } from '@/lib/db'
 import { defaultPermissions, permissionKeys, permissionLabels } from '@/lib/permissions'
 import { teamAccess, teamPermissions } from '../actions'
-import { Brand, ErrorNote } from '../ui'
+import { MerchantShell } from '../merchant-shell'
+import { ErrorNote } from '../ui'
 import { InviteForm } from './invite'
 
 const roles: Record<string, string> = { ADMIN: 'Administrador', MANAGER: 'Gerência', RECEPTION: 'Recepção', PROFESSIONAL: 'Profissional', FINANCE: 'Financeiro', READONLY: 'Consulta' }
@@ -22,7 +22,7 @@ export default async function Team({ searchParams }: { searchParams: Promise<{ e
     db.teamEvent.findMany({ where, orderBy: { createdAt: 'desc' }, take: 50 })
   ])
   const date = new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short', timeZone: member.tenant.timezone })
-  return <div className="site"><header><Brand /><Link href="/dashboard">Voltar ao painel</Link></header><main className="content">
+  return <MerchantShell member={member} current="/equipe">
     <h1>Equipe e permissões</h1><ErrorNote error={(await searchParams).erro} />
     <article><h2>Convidar pessoa</h2><InviteForm professionals={professionals} /></article>
     <article><h2>Acessos</h2><ul>{members.map(person => <li key={person.userId}>
@@ -44,5 +44,5 @@ export default async function Team({ searchParams }: { searchParams: Promise<{ e
     <article><h2>Atividade recente</h2>{changes.length ? <ul>{changes.map(event => <li key={event.id}>
       {date.format(event.createdAt)} · {actions[event.action]} · {event.subject}
     </li>)}</ul> : <p>Nenhuma atividade registrada.</p>}</article>
-  </main></div>
+  </MerchantShell>
 }

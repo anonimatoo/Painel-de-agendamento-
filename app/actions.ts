@@ -13,7 +13,8 @@ import { changeStock, reverseSale } from '@/lib/commerce'
 import { Prisma } from '@prisma/client'
 import { db } from '@/lib/db'
 import { endSession, membership, startSession, userSession, verifyPassword } from '@/lib/auth'
-import { AgendaError, blockSchedule, book, closeAppointment, dayBounds, localDateTime, rescheduleAppointment } from '@/lib/agenda'
+import { changePlanAvailability, savePlan } from '@/lib/plans'
+import { AgendaError, blockSchedule, book, closeAppointment, dayBounds, localDateTime, removeWorkHours, rescheduleAppointment, saveWorkHours } from '@/lib/agenda'
 import { checkStripeConnection, pauseStripePayments, saveStripeConfiguration, StripeSettingsError, stripeForNewPayments } from '@/lib/stripe-settings'
 import { stripeSettingsForm, type StripeSettingsFormState } from '@/lib/stripe-settings-form'
 import { officialCheckoutLink, subscriptionCheckout } from '@/lib/billing'
@@ -83,7 +84,7 @@ export async function accountLink(operation: 'request' | 'reset' | 'resend' | 'v
       const email = credentials.shape.email.parse(form.get('email'))
       if (await allowAttempt('password-reset', email, 3, 1800)) {
         const user = await db.user.findUnique({ where: { email } })
-        if (user?.password && mailConfigured()) await sendAccountLink(user, 'PASSWORD_RESET').catch(() => console.error('password-reset-delivery'))
+        if (user?.password && await mailConfigured()) await sendAccountLink(user, 'PASSWORD_RESET').catch(() => console.error('password-reset-delivery'))
       }
       return '/conta?solicitado=1'
     }
@@ -102,7 +103,7 @@ export async function accountLink(operation: 'request' | 'reset' | 'resend' | 'v
       await endSession()
       return '/login'
     }
-    if (operation === 'resend' && !user.emailVerifiedAt && mailConfigured() && await allowAttempt('verify-email', user.id, 3, 1800)) {
+    if (operation === 'resend' && !user.emailVerifiedAt && await mailConfigured() && await allowAttempt('verify-email', user.id, 3, 1800)) {
       await sendAccountLink(user, 'EMAIL_VERIFY')
     }
     return '/conta?solicitado=1'
@@ -165,8 +166,9 @@ export async function logout() {
 
 export async function manage(operation: string, form: FormData) {
   const section = form.get('dashboardSection')
-  const sections: Record<string, string> = { customer: 'clientes', professional: 'profissionais', assignment: 'profissionais', hours: 'profissionais', settings: 'configuracoes' }
-  const dashboard = section && sections[operation] === section ? '/dashboard?secao=' + section : '/dashboard'
+  const sections: Record<string, string> = { customer: 'clientes', professional: 'profissionais', assignment: 'profissionais', 'hours-edit': 'profissionais', 'hours-remove': 'profissionais', 'professional-edit': 'profissionais', hours: 'profissionais', settings: 'configuracoes' }
+  const fromAgenda = form.get('destination') === 'agenda' && ['booking', 'block', 'unblock', 'wait-close'].includes(operation)
+  const dashboard = fromAgenda ? '/agenda' : section && sections[operation] === section ? '/dashboard?secao=' + section : '/dashboard'
   await perform(async () => {
     const user = await userSession()
     if (!user) return '/login'
@@ -182,13 +184,13 @@ export async function manage(operation: string, form: FormData) {
         const portal = await (await stripe()).billingPortal.sessions.create({ customer: tenant.stripeCustomerId, return_url: base() + '/assinatura' })
         return portal.url
       }
-      if (mailConfigured() && !user.emailVerifiedAt) throw new AgendaError('Confirme seu e-mail antes de contratar uma assinatura.')
+      if (await mailConfigured() && !user.emailVerifiedAt) throw new AgendaError('Confirme seu e-mail antes de contratar uma assinatura.')
       return subscriptionCheckout({ tenantId, email: user.email, origin: base(), ...pay.parse(body) })
     }
     if (!tenant.active || tenant.suspended) throw new AgendaError('Seu estabelecimento precisa de uma assinatura ativa.')
     const scopes: Record<string, Permission> = {
       settings: 'settings.manage', booking: 'agenda.create', cover: 'brand.manage', service: 'service.manage', professional: 'team.professionals',
-      assignment: 'team.professionals', hours: 'team.professionals', customer: 'customer.create',
+      assignment: 'team.professionals', hours: 'team.professionals', 'hours-edit': 'team.professionals', 'hours-remove': 'team.professionals', 'professional-edit': 'team.professionals', customer: 'customer.create',
       product: 'product.manage', reschedule: 'agenda.edit', block: 'agenda.edit', unblock: 'agenda.edit',
       'wait-close': 'agenda.edit', refund: 'finance.refund'
     }
@@ -234,12 +236,21 @@ export async function manage(operation: string, form: FormData) {
       case 'assignment':
         await db.assignment.create({ data: { tenantId, ...z.object({ professionalId: id, serviceId: id }).parse(body) } })
         break
-      case 'hours': {
-        const data = z.object({ professionalId: id, weekday: z.coerce.number().int().min(1).max(7), startMinute: clock, endMinute: clock }).parse(body)
-        if (data.startMinute >= data.endMinute) throw new AgendaError('O horário final deve ser após o início.')
-        await db.workHours.create({ data: { tenantId, ...data } })
+      case 'professional-edit': {
+        const values = z.object({ id, name: title, active: z.enum(['true', 'false']) }).parse(body)
+        const changed = await db.professional.updateMany({ where: { tenantId, id: values.id }, data: { name: values.name, active: values.active === 'true' } })
+        if (!changed.count) throw new AgendaError('Profissional indisponível.')
         break
       }
+      case 'hours':
+      case 'hours-edit': {
+        const { professionalId, ...data } = z.object({ professionalId: id, weekday: z.coerce.number().int().min(1).max(7), startMinute: clock, endMinute: clock }).parse(body)
+        await saveWorkHours(tenantId, professionalId, data, operation === 'hours-edit' ? id.parse(body.id) : undefined)
+        break
+      }
+      case 'hours-remove':
+        await removeWorkHours(tenantId, id.parse(body.professionalId), id.parse(body.id))
+        break
       case 'customer':
         await db.customer.create({ data: { tenantId, ...z.object({ name: title, phone }).parse(body) } })
         break
@@ -298,7 +309,7 @@ export async function brandSettings(operation: 'profile' | 'upload' | 'delete' |
     const user = await userSession()
     if (!user) return '/login'
     const member = await membership(user.id)
-    if (!member || !can(member, 'brand.manage') || !member.tenant.active || member.tenant.suspended) return '/dashboard'
+    if (!member || !can(member, 'brand.manage') || member.tenant.suspended) return '/dashboard'
     const tenantId = member.tenantId
     if (operation === 'profile') {
       const values = z.object({
@@ -448,7 +459,7 @@ export async function saveStripeSettings(form: FormData): Promise<StripeSettings
   }
 }
 
-export async function admin(operation: 'plan' | 'suspend' | 'whatsapp' | 'stripe-test' | 'stripe-pause' | 'platform-fee', form: FormData) {
+export async function admin(operation: 'plan' | 'plan-edit' | 'plan-active' | 'suspend' | 'whatsapp' | 'stripe-test' | 'stripe-pause' | 'platform-fee', form: FormData) {
   await perform(async () => {
     const user = await userSession()
     if (!user?.platformAdmin) return '/login'
@@ -483,15 +494,14 @@ export async function admin(operation: 'plan' | 'suspend' | 'whatsapp' | 'stripe
       })
       return '/super-admin'
     }
-    if (operation === 'plan') {
-      const data = z.object({ name: title, description: title, monthlyCents: cents.min(100), annualCents: cents.min(100), trialDays: z.coerce.number().int().min(0).max(90).default(0) }).parse(body)
-      const api = await stripeForNewPayments()
-      const product = await api.products.create({ name: data.name, description: data.description })
-      const [monthly, annual] = await Promise.all([
-        api.prices.create({ product: product.id, unit_amount: data.monthlyCents, currency: 'brl', recurring: { interval: 'month' } }),
-        api.prices.create({ product: product.id, unit_amount: data.annualCents, currency: 'brl', recurring: { interval: 'year' } })
-      ])
-      await db.plan.create({ data: { ...data, monthlyPriceId: monthly.id, annualPriceId: annual.id } })
+    if (operation === 'plan' || operation === 'plan-edit') {
+      const data = z.object({ name: title, description: text.min(2), monthlyCents: cents.min(100), annualCents: cents.min(100), trialDays: z.coerce.number().int().min(0).max(90).default(0) }).parse(body)
+      const planId = operation === 'plan' ? z.uuid().parse(body.requestId) : id.parse(body.id)
+      await savePlan(user.id, planId, data, operation === 'plan-edit', stripeForNewPayments)
+      return '/super-admin#planos'
+    } else if (operation === 'plan-active') {
+      await changePlanAvailability(user.id, id.parse(body.id), z.enum(['true', 'false']).parse(body.active) === 'true')
+      return '/super-admin#planos'
     } else if (operation === 'whatsapp') {
       const data = z.object({ tenantId: id, instance: z.string().trim().regex(/^[\w-]{0,70}$/) }).parse(body)
       if (data.instance.startsWith('agenda-managed-') && data.instance !== instanceName(data.tenantId)) {
@@ -560,7 +570,8 @@ export async function joinWaitlist(link: string, form: FormData) {
     }
     await db.waitEntry.upsert({
       where: { tenantId_professionalId_serviceId_day_phone: { tenantId, professionalId, serviceId, day, phone: number } },
-      update: {}, create: { tenantId, serviceId, professionalId, day, name, phone: number }
+      update: { notificationConsentAt: form.has('waitNotice') ? new Date() : undefined },
+      create: { tenantId, serviceId, professionalId, day, name, phone: number, notificationConsentAt: form.has('waitNotice') ? new Date() : undefined }
     })
     return path + '?espera=1'
   }, path)
@@ -678,7 +689,7 @@ export async function finishTeamInvite(form: FormData) {
     const { acceptInvite } = await import('@/lib/team')
     const user = await acceptInvite(token, password)
     await startSession(user.id)
-    if (mailConfigured()) await sendAccountLink(user, 'EMAIL_VERIFY').catch(() => console.error('team-email-verification'))
+    if (await mailConfigured()) await sendAccountLink(user, 'EMAIL_VERIFY').catch(() => console.error('team-email-verification'))
     return '/dashboard'
   }, '/convite')
 }
@@ -865,7 +876,7 @@ export async function sendCheckoutNotice(form: FormData) {
     const user = await userSession()
     if (!user?.platformAdmin || !user.adminMfaVerified) return '/login'
     if (!form.has('confirmed')) throw new AgendaError('Confirme que o envio foi autorizado.')
-    if (!mailConfigured()) throw new AgendaError('Configure o serviço de e-mail antes de enviar.')
+    if (!(await mailConfigured())) throw new AgendaError('Configure o serviço de e-mail antes de enviar.')
     const values = z.object({ tenantId: id, planId: id, cycle: z.enum(['monthly', 'annual']) }).parse(Object.fromEntries(form))
     if (!await allowAttempt('checkout-notice', values.tenantId, 5, 3600)) throw new AgendaError('Aguarde antes de enviar outro link.')
     const tenant = await db.tenant.findFirst({ where: { id: values.tenantId, active: false, suspended: false },

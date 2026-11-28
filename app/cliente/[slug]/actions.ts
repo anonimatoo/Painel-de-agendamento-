@@ -8,6 +8,7 @@ import { AgendaError, closeAppointment, rescheduleAppointment } from '@/lib/agen
 import { endSession, hashPassword, membership, startSession, userSession, verifyPassword } from '@/lib/auth'
 import { can } from '@/lib/permissions'
 import { activeStore, consumerDeadline, consumerPath, currentConsumer } from '@/lib/consumer'
+import { requestConsumerRefund } from '@/lib/connected-refunds'
 import { db } from '@/lib/db'
 import { signupEmail, signupPassword } from '@/lib/registration'
 import { beginSocial, clearSocialSignup, pendingSocialSignup } from '@/lib/social-auth'
@@ -101,7 +102,8 @@ export async function updateConsumerNotice(form: FormData) {
   if (!member || !can(member, 'settings.manage') || !member.tenant.active || member.tenant.suspended) redirect('/login')
   const value = z.union([z.literal(''), z.string().regex(/^\d{1,3}$/).transform(Number).pipe(z.number().max(168))]).safeParse(form.get('hours'))
   if (!value.success) redirect('/dashboard?secao=configuracoes&erro=' + encodeURIComponent('Informe entre 0 e 168 horas.') + '#configuracoes')
-  await db.tenant.update({ where: { id: member.tenantId }, data: { consumerNoticeHours: value.data === '' ? null : value.data } })
+  await db.tenant.update({ where: { id: member.tenantId }, data: { consumerNoticeHours: value.data === '' ? null : value.data,
+    ...(member.role === 'ADMIN' ? { automaticAppointmentRefunds: value.data !== '' && form.has('automaticAppointmentRefunds') } : {}) } })
   redirect('/dashboard?secao=configuracoes&politica=1#configuracoes')
 }
 
@@ -119,16 +121,8 @@ export async function changeConsumerAppointment(slug: string, appointmentId: str
       const start = new Date(z.iso.datetime().parse(form.get('startsAt')))
       await rescheduleAppointment(store, appointmentId, start, profile.userId, { userId: profile.userId, after })
     } else if (appointment.paidAt) {
-      await db.$transaction(async tx => {
-        const matches = await tx.$queryRaw<{ id: string }[]>`
-          SELECT id FROM "Appointment" WHERE id = ${appointmentId} AND "tenantId" = ${store.id} AND
-          "consumerUserId" = ${profile.userId} AND status = 'CONFIRMED' AND "startsAt" > ${after} AND "paidAt" IS NOT NULL FOR UPDATE`
-        if (!matches.length) throw new AgendaError('Atendimento indisponível ou fora do prazo de alteração.')
-        if (!await tx.appointmentHistory.count({ where: { appointmentId, operation: 'REFUND_REQUESTED' } })) {
-          await tx.appointmentHistory.create({ data: { appointmentId, operation: 'REFUND_REQUESTED', actorId: profile.userId } })
-        }
-      })
-      return path + '?alteracao=solicitada#agendamentos'
+      const canceled = await requestConsumerRefund(store.id, appointmentId, profile.userId, after)
+      return path + (canceled ? '?alteracao=cancelada' : '?alteracao=solicitada') + '#agendamentos'
     } else {
       await closeAppointment(store.id, appointmentId, 'CANCELED', profile.userId, { userId: profile.userId, after })
     }

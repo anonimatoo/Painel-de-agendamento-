@@ -69,7 +69,7 @@ export default async function Catalog({ searchParams }: {searchParams:Promise<Qu
     {section==='categorias' ? <article><h2>Categorias</h2><form className="inline" action={changeCatalog.bind(null,'categoria')}><Field label="Nome" name="name" /><button name="command" value="salvar">Criar categoria</button></form>
       {categories.map(row => <form className="inline" key={row.name} action={changeCatalog.bind(null,'categoria')}><input name="oldName" type="hidden" value={row.name} /><Field label="Categoria" name="name" value={row.name} /><button className="outline" name="command" value="salvar">Renomear</button></form>)}</article> :
       <div className={'catalog-layout'+(item || query.novo && editAllowed ? ' catalog-layout-edit' : '')}>
-      <article className="commercial-panel"><h2>Catálogo de {section} · {total}</h2>
+      <article className="commercial-panel"><h2>Catálogo de {isProduct ? 'produtos' : 'serviços'} · {total}</h2>
         <form className="inline" method="get">
           <input name="secao" type="hidden" value={section} /><Field label="Buscar por nome ou SKU" name="busca" value={search} required={false} />
           <Field label="Categoria" name="categoria" value={category} required={false} />

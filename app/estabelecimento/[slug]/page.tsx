@@ -26,8 +26,11 @@ export default async function Establishment({ params, searchParams }: {
 }) {
   const { slug } = await params
   const query = await searchParams
+  const preview = query.previa === '1' ? await userSession() : null
+  const member = preview ? await membership(preview.id) : null
+  const previewTenant = member && can(member, 'brand.manage') ? member.tenantId : null
   const tenant = await db.tenant.findFirst({
-    where: { slug, active: true, suspended: false },
+    where: { slug, suspended: false, OR: [{ active: true }, ...(previewTenant ? [{ id: previewTenant }] : [])] },
     include: {
       services: { where: { active: true, archivedAt: null, assignments: { some: { professional: { active: true } } } }, include: {
         assignments: { where: { professional: { active: true } }, include: { professional: true } }
@@ -43,9 +46,7 @@ export default async function Establishment({ params, searchParams }: {
     for (const [key, value] of Object.entries(query)) if (typeof value === 'string' && value.length <= 500) preserved.set(key, value)
     redirect('/estabelecimento/' + encodeURIComponent(alias.tenant.slug) + (preserved.size ? '?' + preserved : ''))
   }
-  const preview = query.previa === '1' ? await userSession() : null
-  const member = preview ? await membership(preview.id) : null
-  const draft = member?.tenantId === tenant.id && can(member, 'brand.manage') && tenant.publicDesignDraft !== null
+  const draft = previewTenant === tenant.id && tenant.publicDesignDraft !== null
   const design = readPublicDesign(draft ? tenant.publicDesignDraft : tenant.publicDesign)
   const visibleProducts = featuredFirst(tenant.products, design.productIds)
   const visibleServices = featuredFirst(tenant.services, design.serviceIds)
@@ -69,7 +70,7 @@ export default async function Establishment({ params, searchParams }: {
   }) : null
   const order = typeof query.pedido === 'string' && query.pedido.length < 100
     ? await db.shopOrder.findFirst({ where: { id: query.pedido, tenantId: tenant.id }, select: { status: true, paymentReview: true } }) : null
-  const purchasable = !tenant.connectPausedAt && tenant.stripeAccountId && tenant.products.some(product => (product.promotionCents ?? product.cents) > 0)
+  const purchasable = tenant.active && !tenant.connectPausedAt && tenant.stripeAccountId && tenant.products.some(product => (product.promotionCents ?? product.cents) > 0)
   const today = DateTime.now().setZone(tenant.timezone).toISODate()!
   const day = typeof query.dia === 'string' ? query.dia : today
   const consumer = await currentConsumer(tenant.id)
@@ -78,7 +79,7 @@ export default async function Establishment({ params, searchParams }: {
   const professional = chosen?.assignments.find(a => a.professionalId === query.profissional)?.professional
   let slots: Awaited<ReturnType<typeof availability>> = []
   let dateError: string | undefined
-  if (chosen && professional) {
+  if (tenant.active && chosen && professional) {
     try {
       slots = await availability(tenant, chosen.id, professional.id, day)
     } catch (error) {
@@ -89,11 +90,11 @@ export default async function Establishment({ params, searchParams }: {
   const picture = banner ?? cover
   const online = Boolean(chosen && tenant.onlinePayment && chosen.cents > 0)
   const checkoutAccount = tenant.stripeAccountId
-  const methods = checkoutAccount && tenant.pixCheckoutEnabled && !tenant.connectPausedAt
+  const methods = tenant.active && checkoutAccount && tenant.pixCheckoutEnabled && !tenant.connectPausedAt
     ? await stripeForNewPayments().then(api => connectStatus(checkoutAccount, api)).catch(() => null) : null
   const pix = Boolean(methods?.pix)
   const pixForService = pix && chosen && Math.ceil(chosen.cents * tenant.depositPercent / 100) >= pixMinimumCents
-  const completed = Boolean(payment?.paidAt && !payment.refundedAt)
+  const completed = Boolean(payment?.paidAt && !payment.refundedAt && payment.checkoutState !== 'REVIEW')
   const checkoutPhoto = chosen ? image('SERVICE', chosen.id) : null
   const steps = ['Serviço', 'Profissional', 'Data', 'Horário', 'Revisão', 'Pagamento', 'Confirmação']
   const stage = completed || confirmed ? 6 : payment ? 5 : slots.length ? 3 : professional ? 2 : 0
@@ -132,6 +133,7 @@ export default async function Establishment({ params, searchParams }: {
         <Link href={portal + '#agendamentos'}><CalendarCheck size={18} aria-hidden /> Meus agendamentos</Link>
         <Link href={portal + '#pedidos'}>Meus pedidos</Link><Link href={portal + '#meus-dados'}>Meus dados</Link>
       </nav>
+      {!tenant.active && <p className="success" role="status">Prévia privada. O estabelecimento ainda não está publicado.</p>}
       {draft && <p className="success" role="status">Prévia do rascunho. <Link href="/personalizacao">Voltar ao editor</Link></p>}
       <ErrorNote error={query.erro ?? dateError} />
       {payment && <article className="booking-result"><h2><CircleCheck aria-hidden /> {completed ? 'Pagamento aprovado' : 'Situação do pagamento'}</h2>
@@ -147,17 +149,17 @@ export default async function Establishment({ params, searchParams }: {
       {design.layout === 'products' && productsSection}
       <div className="storefront-grid"><article id="agendar"><h2>Agende seu atendimento</h2>
         <ol className="booking-progress" aria-label="Etapas do agendamento">{steps.map((name, i) => <li key={name} aria-current={i === stage ? 'step' : undefined}><span>{i + 1}</span>{name}</li>)}</ol>
-        {chosen ? <SlotPicker chosenId={chosen.id} professionalId={professional?.id ?? ''} day={day} today={today}
+        {tenant.active && chosen ? <SlotPicker chosenId={chosen.id} professionalId={professional?.id ?? ''} day={day} today={today}
           services={visibleServices.map(s => ({
             id: s.id, name: s.name, price: brl(s.cents), duration: s.duration,
             professionals: s.assignments.map(a => ({ id: a.professionalId, name: a.professional.name, photo: image('PROFESSIONAL', a.professionalId) ? '/api/imagens/' + image('PROFESSIONAL', a.professionalId) : undefined }))
           }))} /> : <p>O estabelecimento ainda não abriu a agenda.</p>}
-        {professional && chosen && !slots.length && !dateError && <>
+        {tenant.active && professional && chosen && !slots.length && !dateError && <>
           <p>Nenhum horário disponível nesta data.</p>
           <details><summary>Entrar na lista de espera</summary><form action={joinWaitlist.bind(null, slug)}>
             <input type="hidden" name="serviceId" value={chosen.id} /><input type="hidden" name="professionalId" value={professional.id} />
             <input type="hidden" name="day" value={day} /><Field label="Nome" name="name" />
-            <Field label="Telefone com DDI para contato" name="phone" type="tel" /><button>Enviar solicitação</button>
+            <Field label="Telefone com DDI para contato" name="phone" type="tel" /><label className="check"><input type="checkbox" name="waitNotice" /> Quero receber pelo WhatsApp um aviso caso surja horário para esta solicitação.</label><button>Enviar solicitação</button>
           </form></details>
         </>}
         {!!slots.length && <form action={reserve.bind(null, slug)} className="booking-review">

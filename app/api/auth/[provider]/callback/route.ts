@@ -1,4 +1,5 @@
 import { consumerPath } from '@/lib/consumer'
+import { readLimitedBody } from '@/lib/limited-body'
 import { startSession } from '@/lib/auth'
 import { finishSocial } from '@/lib/social-auth'
 import { isSocialProvider, socialOrigin } from '@/lib/social-oidc'
@@ -11,10 +12,9 @@ async function callback(req: Request, { params }: Context) {
   let next = '/login?social=erro'
   try {
     if (isSocialProvider(provider) && req.method === (provider === 'apple' ? 'POST' : 'GET')) {
-      const data = provider === 'apple'
-        ? (req.headers.get('content-type')?.startsWith('application/x-www-form-urlencoded') &&
-          Number(req.headers.get('content-length') ?? 0) <= 32_768 ? new URLSearchParams(await req.text()) : null)
-        : new URL(req.url).searchParams
+      const body = provider === 'apple' && req.headers.get('content-type')?.startsWith('application/x-www-form-urlencoded')
+        ? await readLimitedBody(req, 32_768) : null
+      const data = provider === 'apple' ? body === null ? null : new URLSearchParams(body) : new URL(req.url).searchParams
       const state = data?.get('state')
       const code = data?.get('code')
       if (typeof state === 'string' && typeof code === 'string' && !data?.has('error')) {

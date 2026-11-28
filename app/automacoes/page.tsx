@@ -10,7 +10,7 @@ import { Field } from '../ui'
 import { configureMerchantNotice, queueManualReminder } from './actions'
 
 const historyLabels: Record<string, string> = {
-  CREATED: 'Reserva criada', PAYMENT_STARTED: 'Pagamento iniciado', PAYMENT_CONFIRMED: 'Pagamento e agendamento confirmados',
+  CREATED: 'Reserva criada', PAYMENT_STARTED: 'Pagamento iniciado', PAYMENT_LATE: 'Pagamento tardio · em conciliação', PAYMENT_CONFIRMED: 'Pagamento e agendamento confirmados',
   CANCELED: 'Cancelamento confirmado · vaga liberada', PAYMENT_EXPIRED: 'Pagamento expirado · vaga liberada',
   RESCHEDULED: 'Agendamento alterado', COMPLETED: 'Atendimento concluído', NO_SHOW: 'Falta registrada',
   REFUND_REQUESTED: 'Estorno solicitado', REFUNDED: 'Estorno confirmado · vaga liberada'
@@ -42,7 +42,7 @@ export default async function Automations({ searchParams }: { searchParams: Prom
   const events = [
     ...history.map(row => ({
       id: row.id, appointment: row.appointmentId, date: row.createdAt, title: historyLabels[row.operation] ?? row.operation,
-      service: row.appointment.service.name, state: row.operation === 'REFUND_REQUESTED' ? 'Pendente' : 'Concluído', tone: row.operation === 'REFUND_REQUESTED' ? 'PENDING' : 'COMPLETED', message: false
+      service: row.appointment.service.name, state: ['REFUND_REQUESTED', 'PAYMENT_LATE'].includes(row.operation) ? 'Pendente' : 'Concluído', tone: ['REFUND_REQUESTED', 'PAYMENT_LATE'].includes(row.operation) ? 'PENDING' : 'COMPLETED', message: false
     })),
     ...reminders.map(row => ({
       id: row.id, appointment: row.appointmentId, date: row.sentAt ?? row.runAt,

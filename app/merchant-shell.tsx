@@ -45,7 +45,7 @@ function merchantMenu(member: MerchantMember) {
       { href: '/automacoes', label: 'Automações', icon: Zap, scopes: ['agenda.edit', 'whatsapp.manage'] }
     ] },
     { label: 'Estabelecimento', entries: [
-      { href: '/personalizacao', label: 'Personalização', icon: Palette, scopes: ['brand.manage'] },
+      { href: '/personalizacao', label: 'Personalização', icon: Palette, scopes: ['brand.manage'], availableWithoutPlan: !member.tenant.suspended },
       { href: '/assinatura', label: 'Minha assinatura', icon: CreditCard, admin: true, availableWithoutPlan: true },
       { href: '/dashboard?secao=configuracoes', label: 'Configurações', icon: Settings, scopes: ['settings.manage'] },
       { href: '/primeiro-acesso', label: 'Primeiro acesso', icon: ClipboardList, admin: true, availableWithoutPlan: true },

@@ -1,9 +1,9 @@
-import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { membership, userSession } from '@/lib/auth'
 import { db } from '@/lib/db'
 import { professionalCommission } from '../actions'
-import { Brand, brl, ErrorNote, Field } from '../ui'
+import { MerchantShell } from '../merchant-shell'
+import { brl, ErrorNote, Field } from '../ui'
 
 export default async function Commissions({ searchParams }: { searchParams: Promise<{ erro?: string }> }) {
   const user = await userSession()
@@ -17,7 +17,7 @@ export default async function Commissions({ searchParams }: { searchParams: Prom
       appointment: { include: { professional: true, service: true } }
     }, take: 100, orderBy: { createdAt: 'desc' } })
   ])
-  return <div className="site"><header><Brand /><Link href="/comercial">Voltar ao financeiro</Link></header><main className="content">
+  return <MerchantShell member={member} current="/comissoes">
     <h1>Comissões profissionais</h1><ErrorNote error={(await searchParams).erro} />
     <article><h2>Comissão por profissional</h2><p>Os valores são registrados ao concluir um atendimento. A baixa registra o pagamento realizado pela empresa.</p>
       {people.length ? people.map(person => <details key={person.id}><summary>{person.name}</summary>
@@ -33,5 +33,5 @@ export default async function Commissions({ searchParams }: { searchParams: Prom
       {!item.paidAt && <form action={professionalCommission}><input name="id" type="hidden" value={item.appointmentId} />
         <button className="outline" name="operation" value="paid">Registrar pagamento</button></form>}
     </li>)}</ul> : <p>Nenhuma comissão calculada.</p>}</article>
-  </main></div>
+  </MerchantShell>
 }

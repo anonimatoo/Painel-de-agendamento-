@@ -4,7 +4,7 @@ import { membership, userSession } from '@/lib/auth'
 import { db } from '@/lib/db'
 import { connectStatus } from '@/lib/connect'
 import { whatsAppStatus } from '@/lib/evolution'
-import { Brand } from '../ui'
+import { MerchantShell } from '../merchant-shell'
 
 export default async function FirstAccess({ searchParams }: { searchParams: Promise<{ novo?: string }> }) {
   const user = await userSession()
@@ -32,7 +32,7 @@ export default async function FirstAccess({ searchParams }: { searchParams: Prom
     ['Recebimentos online', Boolean(stripe?.payments), '/recebimentos', true],
     ['Página de agendamento', available && hours > 0, '/estabelecimento/' + tenant.slug, false]
   ] as const
-  return <div className="site"><header><Brand /><Link href="/dashboard">Voltar ao painel</Link></header><main className="content">
+  return <MerchantShell member={member} current="/primeiro-acesso">
     <h1>Primeiro acesso</h1>
     {(await searchParams).novo === '1' && <article>
       <h2>Agenda criada para {tenant.name}</h2>
@@ -40,7 +40,7 @@ export default async function FirstAccess({ searchParams }: { searchParams: Prom
       <p>Escolha seu plano e, em seguida, cadastre os serviços e horários para começar a receber agendamentos.</p>
       <Link className="button" href="/dashboard">Abrir meu painel</Link>
     </article>}
-    {!available && <article><p>Ative a assinatura para configurar o estabelecimento e receber reservas.</p><Link href="/dashboard">Ver assinatura</Link></article>}
+    {!available && <article><p>Prepare sua página agora e ative a assinatura para receber reservas.</p><div className="inline"><Link href="/personalizacao">Personalizar página</Link><Link href="/dashboard">Ver assinatura</Link></div></article>}
     <article><h2>Preparar a agenda</h2>
       <p>O progresso acompanha as configurações salvas. Você pode voltar a qualquer momento.</p>
       <ol>{steps.map(([label, done, href, optional]) => <li key={label}>
@@ -48,5 +48,5 @@ export default async function FirstAccess({ searchParams }: { searchParams: Prom
         {' · '}{done ? 'Concluído' : optional ? 'Opcional' : 'Pendente'}
       </li>)}</ol>
     </article>
-  </main></div>
+  </MerchantShell>
 }

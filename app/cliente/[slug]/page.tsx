@@ -15,6 +15,7 @@ import { brl, ErrorNote, Field } from '../../ui'
 import { changeConsumerAppointment, consumerAccess, consumerLogout, consumerSocial } from './actions'
 
 const appointmentLabels = { CANCELED: 'Cancelado', PENDING: 'Pagamento pendente', CONFIRMED: 'Confirmado', COMPLETED: 'Concluído', NO_SHOW: 'Falta registrada' }
+const refundStatus: Record<string, string> = { QUEUED: 'Estorno programado', SUBMITTED: 'Estorno em processamento', REVIEW: 'Estorno em análise' }
 const orderLabels: Record<string, string> = { PAID: 'Pago', PENDING: 'Pagamento pendente', CANCELED: 'Cancelado', REFUNDED: 'Estornado' }
 
 export default async function ConsumerPage({ params, searchParams }: {
@@ -59,8 +60,8 @@ export default async function ConsumerPage({ params, searchParams }: {
   }
   const [appointments, orders] = await Promise.all([
     db.appointment.findMany({ where: { tenantId: store.id, consumerUserId: profile.userId }, orderBy: { startsAt: 'desc' }, take: 100,
-      include: { service: { select: { name: true } }, professional: { select: { name: true } }, history: { where: { operation: { in: ['RESCHEDULED', 'REFUND_REQUESTED'] } }, orderBy: { createdAt: 'desc' } } } }),
-    db.shopOrder.findMany({ where: { tenantId: store.id, consumerUserId: profile.userId }, orderBy: { createdAt: 'desc' }, take: 100, include: { items: true } })
+      include: { service: { select: { name: true } }, professional: { select: { name: true } }, refundRequest: { select: { state: true } }, connectedRefunds: { where: { state: 'succeeded' }, select: { amount: true } }, history: { where: { operation: { in: ['RESCHEDULED', 'REFUND_REQUESTED'] } }, orderBy: { createdAt: 'desc' } } } }),
+    db.shopOrder.findMany({ where: { tenantId: store.id, consumerUserId: profile.userId }, orderBy: { createdAt: 'desc' }, take: 100, include: { items: true, connectedRefunds: { where: { state: 'succeeded' }, select: { amount: true } } } })
   ])
   const deadline = consumerDeadline(store.consumerNoticeHours)
   const selected = deadline ? appointments.find(row => row.id === query.atendimento && row.status === 'CONFIRMED' && row.startsAt > deadline) : undefined
@@ -85,7 +86,7 @@ export default async function ConsumerPage({ params, searchParams }: {
       <nav className="consumer-nav" aria-label="Minha conta">{summaries.map(({ title, href, icon: Icon }) => <Link href={href} key={title}><Icon aria-hidden size={18} />{title}</Link>)}</nav>
       <ErrorNote error={query.erro} />
       {query.perfil && <p className="success" role="status">Seus dados foram salvos.</p>}
-      {query.alteracao && <p className="success" role="status">{query.alteracao === 'solicitada' ? 'Solicitação de estorno registrada. Você pode acompanhar o andamento nesta página.' : 'Atendimento atualizado.'}</p>}
+      {query.alteracao && <p className="success" role="status">{query.alteracao === 'solicitada' ? 'Solicitação de estorno registrada. Você pode acompanhar o andamento nesta página.' : query.alteracao === 'cancelada' ? 'Atendimento cancelado. O estorno foi programado.' : 'Atendimento atualizado.'}</p>}
       <div className="consumer-panels">
         <article id="agendamentos"><h2>Meus agendamentos</h2>
           {upcoming.length === 0 && <p>Você ainda não tem agendamentos futuros. <Link href={publicPath + '#agendar'}>Escolher um horário</Link></p>}
@@ -106,8 +107,8 @@ export default async function ConsumerPage({ params, searchParams }: {
           {orders.map(row => <div className="consumer-item" key={row.id}><div><strong>{row.items.map(item => item.name + ' × ' + item.quantity).join(', ')}</strong><p>{date(row.createdAt)} · {brl(row.cents)}</p></div><span>{row.paymentReview ? 'Em verificação' : orderLabels[row.status] ?? row.status}</span></div>)}
         </article>
         <article id="pagamentos"><h2>Pagamentos e estornos</h2>
-          {appointments.filter(row => row.paidAt).map(row => <div className="consumer-item" key={row.id}><strong>{row.service.name} · {brl(row.chargeCents ?? row.cents)}</strong><span>{row.refundedAt ? 'Estornado em ' + date(row.refundedAt) : 'Pago em ' + date(row.paidAt!)}</span>{row.paymentIntentId && <Link href={path + '/comprovante?tipo=agendamento&id=' + row.id}>Comprovante Stripe</Link>}</div>)}
-          {orders.filter(row => row.paidAt).map(row => <div className="consumer-item" key={row.id}><strong>Pedido · {brl(row.cents)}</strong><span>{row.refundedAt ? 'Estornado em ' + date(row.refundedAt) : 'Pago em ' + date(row.paidAt!)}</span>{row.paymentIntentId && <Link href={path + '/comprovante?tipo=pedido&id=' + row.id}>Comprovante Stripe</Link>}</div>)}
+          {appointments.filter(row => row.paidAt).map(row => <div className="consumer-item" key={row.id}><strong>{row.service.name} · {brl(row.chargeCents ?? row.cents)}</strong><span>{row.refundedAt ? 'Estornado em ' + date(row.refundedAt) : 'Pago em ' + date(row.paidAt!)}{row.checkoutState === 'REVIEW' && ' · Em conciliação'}{row.refundRequest && refundStatus[row.refundRequest.state] && ' · ' + refundStatus[row.refundRequest.state]}{row.connectedRefunds.length > 0 && !row.refundedAt && ' · Estorno parcial de ' + brl(row.connectedRefunds.reduce((sum, item) => sum + item.amount, 0))}</span>{row.paymentIntentId && <Link href={path + '/comprovante?tipo=agendamento&id=' + row.id}>Comprovante Stripe</Link>}</div>)}
+          {orders.filter(row => row.paidAt).map(row => <div className="consumer-item" key={row.id}><strong>Pedido · {brl(row.cents)}</strong><span>{row.refundedAt ? 'Estornado em ' + date(row.refundedAt) : 'Pago em ' + date(row.paidAt!)}{row.paymentReview && ' · Em conciliação'}{row.connectedRefunds.length > 0 && !row.refundedAt && ' · Estorno parcial de ' + brl(row.connectedRefunds.reduce((sum, item) => sum + item.amount, 0))}</span>{row.paymentIntentId && <Link href={path + '/comprovante?tipo=pedido&id=' + row.id}>Comprovante Stripe</Link>}</div>)}
           {!appointments.some(row => row.paidAt) && !orders.some(row => row.paidAt) && <p>Nenhum pagamento confirmado.</p>}
         </article>
         <article id="historico"><h2>Histórico de atendimentos</h2>

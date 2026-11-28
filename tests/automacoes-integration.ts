@@ -12,7 +12,7 @@ async function main() {
   const database = new URL(process.env.DATABASE_URL ?? 'postgresql://invalid/invalid')
   const redis = new URL(process.env.REDIS_URL ?? 'redis://invalid')
   assert.equal(database.hostname, '127.0.0.1')
-  assert.equal(database.pathname, '/cs_commercial_worker')
+  assert.ok(['/cs_commercial_worker', '/cs_v3_worker'].includes(database.pathname))
   assert.equal(redis.hostname, '127.0.0.1')
   assert.equal(redis.pathname, '/14')
   assert.equal(await db.tenant.count(), 0)

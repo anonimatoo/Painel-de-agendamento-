@@ -12,9 +12,10 @@ const path = '/personalizacao'
 export async function updatePublicDesign(form: FormData) {
   const user = await userSession()
   const member = user ? await membership(user.id) : null
-  if (!member?.tenant.active || member.tenant.suspended || !can(member, 'brand.manage')) redirect('/dashboard')
+  if (!member || member.tenant.suspended || !can(member, 'brand.manage')) redirect('/dashboard')
   const { tenantId } = member
   if (form.get('command') === 'publish') {
+    if (!member.tenant.active) redirect(path)
     const published = await db.$transaction(async tx => {
       const [current] = await tx.$queryRaw<{ publicDesignDraft: Prisma.JsonValue | null }[]>`
         SELECT "publicDesignDraft" FROM "Tenant" WHERE id = ${tenantId} AND active AND NOT suspended FOR UPDATE`

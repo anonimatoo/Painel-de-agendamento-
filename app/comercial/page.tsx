@@ -82,8 +82,8 @@ export default async function CommercePage({ searchParams }: { searchParams: Pro
       {date(order.createdAt)} · {order.customerName} · +{order.phone} · {brl(order.cents)} ·
       {' '}{order.paymentReview ? 'Em verificação' : order.status === 'PAID' ? 'Pago' : order.status === 'PENDING' ? 'Aguardando pagamento' : order.status === 'REFUNDED' ? 'Estornado' : 'Cancelado'}
       {order.status === 'PENDING' && <form action={commerce.bind(null, 'review-order')}><input name="id" type="hidden" value={order.id} /><button className="outline">Consultar pagamento</button></form>}
-      {can(member, 'finance.refund') && order.status === 'PAID' && <form action={commerce.bind(null, 'refund-order')}>
-        <input type="hidden" name="id" value={order.id} /><button className="outline">Estornar pedido e repor estoque</button>
+      {can(member, 'finance.refund') && (order.status === 'PAID' || order.status === 'CANCELED' && order.paymentReview && order.paidAt) && <form action={commerce.bind(null, 'refund-order')}>
+        <input type="hidden" name="id" value={order.id} /><button className="outline">{order.status === 'PAID' ? 'Estornar pedido e repor estoque' : 'Estornar pagamento tardio'}</button>
       </form>}
       <ul>{order.items.map(item => <li key={item.productId}>{item.quantity} × {item.name}</li>)}</ul>
     </li>)}</ul> : <p>Nenhum pedido online.</p>}</article>

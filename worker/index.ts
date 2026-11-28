@@ -3,6 +3,7 @@ import { DateTime } from 'luxon'
 import { scheduleBirthdays } from '../lib/whatsapp-followup'
 import { messageTemplates, renderMessage } from '../lib/whatsapp-template'
 import { reminderOffsets } from '../lib/agenda'
+import { processAppointmentRefunds } from '../lib/connected-refunds'
 import { reconcileOrders } from '../lib/orders'
 import { dispatchCommercial } from '../lib/commercial-notices'
 import { reconcileBilling } from '../lib/billing-sync'
@@ -10,6 +11,7 @@ import { stripe } from '../lib/stripe'
 import { reconcileAppointments } from '../lib/connect'
 import { deliverMessage, recoverDelivery } from '../lib/delivery'
 import { db } from '../lib/db'
+import { notifyWaitList } from '../lib/waitlist'
 import { sendWhatsApp } from '../lib/evolution'
 
 const url = new URL(process.env.REDIS_URL ?? 'redis://localhost:56379')
@@ -100,7 +102,12 @@ async function publishReminders() {
     name: 'send', data: { id },
     opts: { jobId: id, attempts: 1, removeOnComplete: true, removeOnFail: true }
   })))
+  if (!reportedReady && process.send) {
+    reportedReady = true
+    process.send('ready')
+  }
 }
+let reportedReady = false
 let pending: Promise<void> | undefined
 async function checkBilling() {
   if (await db.tenant.count({ where: { stripeCustomerId: { not: null } } })) await reconcileBilling(await stripe())
@@ -113,8 +120,10 @@ function tickBilling() {
     .catch(() => console.error('billing-reconciliation-unavailable')).finally(() => { billingPending = undefined })
 }
 function tick() {
-  if (!pending) pending = Promise.all([publishReminders(), reconcileAppointments(), db.shopOrder.count({ where: { status: 'PENDING', paymentReview: false, expiresAt: { lte: new Date() } } })
-    .then(async count => { if (count) await reconcileOrders(await stripe()) })]).then(() => undefined).catch(() => console.error('Não foi possível consultar os lembretes.')).finally(() => { pending = undefined })
+  if (!pending) pending = Promise.allSettled([publishReminders(), reconcileAppointments(), processAppointmentRefunds(stripe), notifyWaitList(), db.shopOrder.count({ where: { status: 'PENDING', paymentReview: false, expiresAt: { lte: new Date() } } })
+    .then(async count => { if (count) await reconcileOrders(await stripe()) })]).then(results => {
+      if (results.some(result => result.status === 'rejected')) console.error('Falha em uma rotina do worker.')
+    }).finally(() => { pending = undefined })
 }
 const timer = setInterval(tick, 15_000)
 const billingTimer = setInterval(tickBilling, 60_000)

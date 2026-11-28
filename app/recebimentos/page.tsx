@@ -14,11 +14,12 @@ export default async function Receipts({ searchParams }: { searchParams: Promise
   const member = await membership(user.id)
   if (!member || !can(member, 'finance.read')) redirect('/dashboard')
   const tenant = member.tenant
+  const labels: Record<string, string> = { pending: 'Pendente', succeeded: 'Confirmado', requires_action: 'Requer ação', failed: 'Recusado', canceled: 'Cancelado' }
   const [status, bookings, obligations] = await Promise.all([
     tenant.stripeAccountId ? connectStatus(tenant.stripeAccountId).catch(() => null) : null,
     db.appointment.findMany({
       where: { tenantId: tenant.id, OR: [{ status: 'PENDING' }, { checkoutState: 'REVIEW' }, { paidAt: { not: null } }] },
-      include: { customer: { select: { name: true } }, history: { where: { operation: 'REFUND_REQUESTED' }, select: { id: true }, take: 1 } }, orderBy: { createdAt: 'desc' }, take: 100
+      include: { customer: { select: { name: true } }, refundRequest: { select: { state: true } }, connectedRefunds: { take: 10, orderBy: { succeededAt: 'desc' } }, history: { where: { operation: 'REFUND_REQUESTED' }, select: { id: true }, take: 1 } }, orderBy: { createdAt: 'desc' }, take: 100
     }),
     connectObligations(tenant.id)
   ])
@@ -39,13 +40,15 @@ export default async function Receipts({ searchParams }: { searchParams: Promise
         </form>}
         <p>O histórico e os estornos continuam acessíveis. Para pedir o encerramento da conta Express, procure o suporte após concluir as obrigações pendentes.</p>
       </>}
-      <Link href="/dashboard#configuracoes">Configurar forma de pagamento e sinal</Link>
+      <Link href="/dashboard?secao=configuracoes">Configurar forma de pagamento e sinal</Link>
     </article>
     <article><h2>Pagamentos de atendimentos</h2>
       {bookings.length ? <ul>{bookings.map(item => <li key={item.id}>
         {item.customer.name} · {brl(item.chargeCents ?? item.cents)} ·
         {' '}{item.checkoutState === 'REVIEW' ? 'Em verificação' : item.refundedAt ? 'Estornado' : item.paidAt ? 'Pago' : 'Aguardando pagamento'}
-        {!item.refundedAt && item.history.length > 0 && <><span className="state-pill">Estorno solicitado</span>
+        {item.refundRequest && <p>Estorno automático · {({ QUEUED: 'Programado', SUBMITTED: 'Em processamento', REVIEW: 'Em análise', SUCCEEDED: 'Concluído' } as Record<string, string>)[item.refundRequest.state]}</p>}
+        {item.connectedRefunds.length > 0 && <ul>{item.connectedRefunds.map(item => <li key={item.id}>Estorno de {brl(item.amount)} · {labels[item.state]}</li>)}</ul>}
+        {!item.refundRequest && !item.refundedAt && (item.history.length > 0 || item.paidAt && item.checkoutState === 'REVIEW') && <><span className="state-pill">{item.checkoutState === 'REVIEW' ? 'Pagamento fora da reserva' : 'Estorno solicitado'}</span>
           {can(member, 'finance.refund') && tenant.active && !tenant.suspended && <form action={manage.bind(null, 'refund')}><input hidden readOnly name="id" value={item.id} /><button className="outline">Estornar pagamento</button></form>}</>}
         {item.status === 'PENDING' && <form action={reviewPayment}>
           <input name="id" type="hidden" value={item.id} /><button className="outline">Consultar pagamento na Stripe</button>

@@ -35,7 +35,7 @@ export async function registerAccount(social: boolean, _: RegisterState, form: F
     })
     if (social) await clearSocialSignup()
     await startSession(user.id, false, social)
-    if (!user.emailVerifiedAt && mailConfigured()) await sendAccountLink(user, 'EMAIL_VERIFY').catch(() => {})
+    if (!user.emailVerifiedAt && await mailConfigured()) await sendAccountLink(user, 'EMAIL_VERIFY').catch(() => {})
   } catch (error) {
     return { ...values, message: error instanceof AgendaError ? error.message : 'Não foi possível criar a conta. Tente novamente.' }
   }

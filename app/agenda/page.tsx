@@ -182,7 +182,7 @@ export default async function AgendaPage({ searchParams }: { searchParams: Promi
               {events.map(appointmentDetails)}
               {interruptions.map(item => <div className={styles.block} key={item.id}>
                 <LockKeyhole size={15} aria-hidden /><div><strong>Horário bloqueado</strong><small>{date(item.startsAt).toFormat('dd/LL HH:mm')} – {date(item.endsAt).toFormat('dd/LL HH:mm')} · {item.professional.name}</small><span>{item.reason}</span></div>
-                {manager && <form action={manage.bind(null, 'unblock')}><input type="hidden" name="id" value={item.id} /><button className="outline">Remover bloqueio</button></form>}
+                {manager && <form action={manage.bind(null, 'unblock')}><input type="hidden" name="destination" value="agenda" /><input type="hidden" name="id" value={item.id} /><button className="outline">Remover bloqueio</button></form>}
               </div>)}
               {slots && <div className={styles.availability}>
                 <h4>Horários disponíveis <small>{slots.length}</small></h4>
@@ -203,15 +203,15 @@ export default async function AgendaPage({ searchParams }: { searchParams: Promi
       </article>
       <div className={styles.tools}>
         {create && <article id="novo-agendamento"><h2><CalendarPlus aria-hidden /> Novo agendamento presencial</h2>
-          {customers.length > 0 && activeServices.length > 0 && activeProfessionals.length > 0 ? <form className={styles.formGrid} action={manage.bind(null, 'booking')}>
+          {customers.length > 0 && activeServices.length > 0 && activeProfessionals.length > 0 ? <form className={styles.formGrid} action={manage.bind(null, 'booking')}><input type="hidden" name="destination" value="agenda" />
             <label>Cliente<select name="customerId" required><option value="">Selecione</option>{customers.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
             <label>Serviço<select name="serviceId" defaultValue={serviceId ?? ''} required><option value="">Selecione</option>{activeServices.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
             <label>Profissional<select name="professionalId" defaultValue={professionalId ?? ''} required><option value="">Selecione</option>{activeProfessionals.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
             <Field label="Data e horário" name="startsAt" type="datetime-local" value={bookingSelection} /><button>Criar agendamento</button>
-          </form> : <p>Cadastre o <Link href="/dashboard#clientes">cliente</Link>, o <Link href="/catalogo">serviço</Link>, o <Link href="/dashboard#profissionais">profissional e os horários</Link> para criar um atendimento.</p>}
+          </form> : <p>Cadastre o <Link href="/dashboard?secao=clientes">cliente</Link>, o <Link href="/catalogo">serviço</Link>, o <Link href="/dashboard?secao=profissionais">profissional e os horários</Link> para criar um atendimento.</p>}
         </article>}
-        {manager && activeProfessionals.length > 0 && <article><h2><LockKeyhole aria-hidden /> Bloquear horários</h2><form className={styles.formGrid} action={manage.bind(null, 'block')}>
-          <label>Profissional<select name="professionalId">{activeProfessionals.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+        {manager && activeProfessionals.length > 0 && <article><h2><LockKeyhole aria-hidden /> Bloquear horários</h2><form className={styles.formGrid} action={manage.bind(null, 'block')}><input type="hidden" name="destination" value="agenda" />
+          <label>Profissional<select name="professionalId"><option value="all">Todos os profissionais ativos</option>{activeProfessionals.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
           <Field label="Início" name="startsAt" type="datetime-local" /><Field label="Fim" name="endsAt" type="datetime-local" />
           <Field label="Motivo, como férias ou feriado" name="reason" /><button>Bloquear horário</button>
         </form></article>}
@@ -219,7 +219,8 @@ export default async function AgendaPage({ searchParams }: { searchParams: Promi
           {waiting.length ? <ul className={styles.list}>{waiting.map(item => <li key={item.id}>
             <strong>{customerVisible ? item.name : 'Solicitação de atendimento'}</strong>
             <span>{DateTime.fromISO(item.day, { zone }).toFormat('dd/LL/yyyy')} · {item.service.name} · {item.professional.name}{customerVisible ? ' · +' + item.phone : ''}</span>
-            {can(member, 'agenda.edit') && <form action={manage.bind(null, 'wait-close')}><input type="hidden" name="id" value={item.id} /><button className="outline">Encerrar solicitação</button></form>}
+            {item.notificationConsentAt && <span className="state-pill">{({ QUEUED: 'Aguardando vaga', SENDING: 'Em processamento', ACCEPTED: 'Aceito pelo provedor', REVIEW: 'Envio em análise', FAILED: 'Envio recusado' } as Record<string,string>)[item.notificationState]}</span>}
+            {can(member, 'agenda.edit') && <form action={manage.bind(null, 'wait-close')}><input type="hidden" name="destination" value="agenda" /><input type="hidden" name="id" value={item.id} /><button className="outline">Encerrar solicitação</button></form>}
           </li>)}</ul> : <p>Nenhuma solicitação em aberto.</p>}
         </article>}
         <article><h2><History aria-hidden /> Histórico recente</h2>

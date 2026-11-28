@@ -3,7 +3,8 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { mkdir, readFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { DateTime } from 'luxon'
-import type Stripe from 'stripe'
+import Stripe from 'stripe'
+import { seal } from '../lib/secrets'
 import { chromium } from 'playwright-core'
 import { book, availability } from '../lib/agenda'
 import { hashPassword } from '../lib/auth'
@@ -18,6 +19,7 @@ const secondSlug = slug + '-outra-unidade'
 const owner = 'comerciante-' + suffix + '@example.test'
 const consumer = 'cliente-' + suffix + '@example.test'
 const stranger = 'vizinho-' + suffix + '@example.test'
+const administrator = 'plataforma-' + suffix + '@example.test'
 const password = 'Senha-ficticia-de-teste-2026!'
 const evidence = process.env.COMMERCIAL_EVIDENCE
 const sizes = [{ width: 390, height: 844 }, { width: 768, height: 1024 }, { width: 1280, height: 800 }, { width: 1440, height: 900 }, { width: 1920, height: 1080 }]
@@ -25,7 +27,7 @@ const sizes = [{ width: 390, height: 844 }, { width: 768, height: 1024 }, { widt
 async function main() {
   const datasource = new URL(process.env.DATABASE_URL ?? 'postgresql://invalid/invalid')
   assert.equal(origin.hostname, '127.0.0.1')
-  assert.ok(['127.0.0.1', 'localhost'].includes(datasource.hostname) && /^\/cs_commercial_test(?:_[a-z0-9]+)?$/.test(datasource.pathname))
+  assert.ok(['127.0.0.1', 'localhost'].includes(datasource.hostname) && /^\/(?:cs_commercial_test(?:_[a-z0-9]+)?|cs_v3_browser)$/.test(datasource.pathname))
   assert.equal(await db.stripeSettings.count(), 0)
   assert.equal(new URL(process.env.S3_ENDPOINT ?? 'https://invalid').hostname, '127.0.0.1')
   if (evidence) await mkdir(evidence, { recursive: true })
@@ -70,6 +72,18 @@ async function main() {
     await mainPage.getByLabel('Senha', { exact: true }).fill(password)
     await mainPage.getByRole('button', { name: 'Entrar', exact: true }).click()
     await mainPage.waitForURL('**/dashboard')
+    await db.tenant.update({ where: { id: store.id }, data: { active: false } })
+    await mainPage.goto(new URL('/personalizacao', origin).href)
+    await mainPage.getByText('Prepare sua página antes de assinar.', { exact: false }).waitFor()
+    await mainPage.getByRole('link', { name: 'Visualizar página', exact: true }).click()
+    await mainPage.getByText('Prévia privada.', { exact: false }).waitFor()
+    assert.equal(await mainPage.getByRole('button', { name: 'Confirmar agendamento' }).count(), 0)
+    assert.equal((await anonymous.request.get(new URL(storePath + '?previa=1', origin).href)).status(), 404)
+    const media = await db.mediaAsset.findFirstOrThrow({ where: { tenantId: store.id, kind: 'BANNER' } })
+    const image = new URL('/api/imagens/' + media.key, origin).href
+    assert.equal((await anonymous.request.get(image)).status(), 404)
+    assert.equal((await mainPage.request.get(image)).headers()['cache-control'], 'private, no-store')
+    await db.tenant.update({ where: { id: store.id }, data: { active: true } })
     await mainPage.goto(new URL('/catalogo?novo=produto', origin).href)
     await mainPage.getByLabel('Nome', { exact: true }).fill('Shampoo revitalizante')
     await mainPage.getByLabel('Preço normal (R$)', { exact: true }).fill('59,90')
@@ -111,7 +125,10 @@ async function main() {
     await client.getByLabel('Corte feminino', { exact: false }).check()
     await client.getByText('Shampoo revitalizante', { exact: true }).waitFor()
     await client.getByLabel('Ana Souza').check()
-    await client.getByLabel('Escolha um dia').fill(dayValue)
+    const nextDate = day.setLocale('pt-BR')
+    if (nextDate.month !== DateTime.now().setZone(store.timezone).month) await client.getByRole('button', { name: 'Próximo mês' }).click()
+    await client.getByRole('button', { name: nextDate.toFormat("dd 'de' MMMM 'de' yyyy") }).click()
+    assert.equal(await client.getByLabel('Escolha um dia').inputValue(), dayValue)
     await client.getByRole('button', { name: 'Consultar horários' }).click()
     await client.getByLabel('09:00', { exact: true }).check()
     assert.equal(await client.getByLabel('Nome', { exact: true }).inputValue(), profile.name)
@@ -149,12 +166,21 @@ async function main() {
       name: profile.name, phone: profile.phone, consumerUserId: profile.userId, consent: false, online: true,
       checkoutReturnUrl: new URL(storePath, origin).href
     })
-    const snapshot = { id: eventId, type: 'checkout.session.completed', account: fakeAccount, data: { object: {
+    const snapshot = { id: eventId, object: 'event', livemode: false, type: 'checkout.session.completed', account: fakeAccount, data: { object: {
       id: 'cs_test_' + suffix, metadata: { appointmentId: paid.id }, payment_status: 'paid', amount_total: paid.chargeCents,
       currency: 'brl', payment_intent: 'pi_' + suffix
     } } } as unknown as Stripe.Event
-    await applyEvent(snapshot)
-    await applyEvent(snapshot)
+    const notify = async () => {
+      if (!process.env.STRIPE_CONNECT_WEBHOOK_SECRET) { await applyEvent(snapshot); return }
+      const payload = JSON.stringify(snapshot)
+      const signature = Stripe.webhooks.generateTestHeaderString({ payload, secret: process.env.STRIPE_CONNECT_WEBHOOK_SECRET })
+      const response = await anonymous.request.post(new URL('/api/stripe/connect', origin).href, {
+        data: payload, headers: { 'stripe-signature': signature }
+      })
+      assert.equal(response.status(), 200)
+    }
+    await notify()
+    await notify()
     assert.equal(await db.appointmentHistory.count({ where: { appointmentId: paid.id, operation: 'PAYMENT_CONFIRMED' } }), 1)
     assert.equal((await db.appointment.findUniqueOrThrow({ where: { id: paid.id } })).status, 'CONFIRMED')
     await client.goto(new URL(portalPath, origin).href)
@@ -166,6 +192,16 @@ async function main() {
     const paidProof = portalPath + '/comprovante?tipo=agendamento&id=' + paid.id
     assert.equal((await anonymous.request.get(new URL(paidProof, origin).href)).status(), 404)
 
+    const admin = await db.user.create({ data: { email: administrator, platformAdmin: true } })
+    await db.user.update({ where: { id: admin.id }, data: { mfaSecret: seal('synthetic-visual-only', 'mfa:' + admin.id) } })
+    const adminContext = await browser.newContext({ locale: 'pt-BR' })
+    const adminToken = randomBytes(32).toString('base64url')
+    await db.session.create({ data: {
+      tokenHash: createHash('sha256').update(adminToken).digest('hex'), userId: admin.id,
+      expiresAt: new Date(Date.now() + 600_000), mfaVerified: true
+    } })
+    await adminContext.addCookies([{ name: 'agenda_session', value: adminToken, url: origin.origin }])
+    const adminPage = await adminContext.newPage()
     const screens = [
       { name: 'inicio', path: '/', page: anonymous, heading: /Seu próximo atendimento/ },
       { name: 'cadastro', path: '/cadastro', page: anonymous, heading: 'Criar conta' },
@@ -177,12 +213,31 @@ async function main() {
       { name: 'cliente', path: portalPath, page: client, heading: 'Olá, Cliente!' },
       { name: 'confirmacao', path: resultPath, page: anonymous, heading: 'Pagamento aprovado' },
       { name: 'automacoes', path: '/automacoes', page: mainPage, heading: 'Central de automações' },
-      { name: 'financeiro', path: '/relatorios', page: mainPage, heading: 'Relatórios financeiros' }
+      { name: 'financeiro', path: '/relatorios', page: mainPage, heading: 'Relatórios financeiros' },
+      { name: 'servicos', path: '/catalogo?secao=servicos', page: mainPage, heading: 'Catálogo de serviços' },
+      { name: 'categorias', path: '/catalogo?secao=categorias', page: mainPage, heading: 'Categorias' },
+      { name: 'profissionais', path: '/dashboard?secao=profissionais', page: mainPage, heading: 'Profissionais' },
+      { name: 'clientes', path: '/dashboard?secao=clientes', page: mainPage, heading: 'Clientes' },
+      { name: 'equipe', path: '/equipe', page: mainPage, heading: 'Equipe e permissões' },
+      { name: 'estoque-vendas', path: '/comercial#estoque', page: mainPage, heading: 'Produtos e estoque' },
+      { name: 'pedidos', path: '/comercial#pedidos', page: mainPage, heading: 'Pedidos para retirada' },
+      { name: 'recebimentos', path: '/recebimentos', page: mainPage, heading: 'Receber pagamentos' },
+      { name: 'comissoes', path: '/comissoes', page: mainPage, heading: 'Comissões profissionais' },
+      { name: 'whatsapp-marketing', path: '/whatsapp#preferencias', page: mainPage, heading: 'Lembretes e avisos' },
+      { name: 'personalizacao', path: '/personalizacao', page: mainPage, heading: 'Personalização' },
+      { name: 'assinatura', path: '/assinatura', page: mainPage, heading: 'Faturas da assinatura' },
+      { name: 'super-admin', path: '/super-admin', page: adminPage, heading: 'Administração da plataforma' },
+      { name: 'diagnostico', path: '/diagnostico', page: adminPage, heading: /Diagnóstico/ }
     ]
     for (const { width, height } of sizes) {
       for (const screen of screens) {
         await screen.page.setViewportSize({ width, height })
-        assert.equal((await screen.page.goto(new URL(screen.path, origin).href))?.status(), 200, screen.path)
+        const url = new URL(screen.path, origin)
+        const fragment = url.hash
+        url.hash = ''
+        assert.equal((await screen.page.goto(url.href))?.status(), 200, screen.path)
+        if (fragment) await screen.page.evaluate(value => { window.location.hash = value }, fragment)
+
         await screen.page.getByRole('heading', { name: screen.heading }).first().waitFor()
         const overflow = await screen.page.evaluate(() => {
           if (document.documentElement.scrollWidth <= innerWidth + 1) return []
@@ -202,7 +257,7 @@ async function main() {
     const canceled = await db.appointment.findUniqueOrThrow({ where: { id: reservation.id } })
     assert.equal(canceled.status, 'CANCELED')
     assert.ok((await availability(store, service.id, professional.id, dayValue)).some(slot => slot.start === canceled.startsAt.toISOString()))
-    console.log('Chromium: 55 verificações em cinco resoluções, cadastro sem comércio, publicação, reserva, rearranjo, confirmação simulada, estorno solicitado, cancelamento e isolamento.')
+    console.log(`Chromium: ${sizes.length * screens.length} verificações em cinco resoluções, prévia privada, cadastro sem comércio, publicação, reserva, rearranjo, confirmação simulada, estorno solicitado, cancelamento e isolamento.`)
   } finally {
     await browser.close()
     for (const image of await db.mediaAsset.findMany({ where: { tenantId: store.id } })) await deleteMedia(store.id, image.id)
@@ -222,7 +277,7 @@ async function main() {
       db.financialEntry.deleteMany({ where: { tenantId } }),
       db.mediaAsset.deleteMany({ where: { tenantId } }),
       db.tenant.deleteMany({ where: { id: tenantId } }),
-      db.user.deleteMany({ where: { email: { in: [sessionUser.email, consumer, stranger] } } })
+      db.user.deleteMany({ where: { email: { in: [sessionUser.email, consumer, stranger, administrator] } } })
     ])
   }
 }

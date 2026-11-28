@@ -231,3 +231,13 @@ button:disabled{opacity:.65;cursor:wait}
   .consumer-nav a { min-height:42px; font-size:.82rem; gap:.3rem; padding:.45rem .55rem }
   .consumer-nav svg { flex:0 0 16px }
 }
+.booking-calendar { border:1px solid #e5daf3; border-radius:12px; padding:.5rem; margin-bottom:.55rem; background:#fff }
+.booking-calendar-head,.booking-calendar-grid { display:grid; align-items:center; gap:.12rem; text-align:center }
+.booking-calendar-head { grid-template-columns:auto minmax(0,1fr) auto; margin-bottom:.35rem }
+.booking-calendar-head strong { text-transform:capitalize; font-size:.88rem }
+.booking-calendar-head button { padding:.22rem .36rem }
+.booking-calendar-grid { grid-template-columns:repeat(7,minmax(0,1fr)); font-size:.75rem }
+.booking-calendar-grid span { color:var(--muted); font-weight:600 }
+.booking-calendar-grid button { width:100%; min-height:26px; padding:.1rem; background:transparent; color:var(--ink); border-radius:6px }
+.booking-calendar-grid button:disabled { opacity:.5; cursor:default }
+.booking-calendar-grid button[aria-pressed=true] { background:var(--accent); color:#fff }

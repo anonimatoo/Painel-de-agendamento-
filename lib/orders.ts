@@ -59,14 +59,16 @@ export async function settleOrder(tx: Prisma.TransactionClient, account: string,
   if (!orderId) return
   const order = await tx.shopOrder.findFirst({ where: { id: orderId, status: { in: ['PENDING', 'CANCELED'] }, tenant: { stripeAccountId: account } } })
   if (!order || order.checkoutId && order.checkoutId !== session.id) return
+  const paymentIntentId = typeof session.payment_intent === 'string' ? session.payment_intent : session.payment_intent?.id
+  const approved = session.payment_status === 'paid' && session.currency === 'brl' && session.amount_total === order.cents && Boolean(paymentIntentId)
   if (order.status === 'CANCELED') {
-    if (session.payment_status === 'paid') await tx.shopOrder.updateMany({
-      where: { id: order.id, status: 'CANCELED' }, data: { paymentReview: true, checkoutId: session.id }
+    if (approved) await tx.shopOrder.updateMany({
+      where: { id: order.id, status: 'CANCELED', paidAt: null },
+      data: { paymentReview: true, checkoutId: session.id, paymentIntentId, paidAt: new Date() }
     })
     return
   }
-  if (session.payment_status === 'paid' && session.currency === 'brl' && session.amount_total === order.cents) {
-    const paymentIntentId = typeof session.payment_intent === 'string' ? session.payment_intent : session.payment_intent?.id
+  if (approved) {
     await tx.shopOrder.updateMany({
       where: { id: order.id, status: 'PENDING' },
       data: { status: 'PAID', paymentReview: false, paidAt: new Date(), paymentIntentId, checkoutId: session.id }
@@ -107,23 +109,5 @@ export async function reconcileOrders(api: Stripe) {
     } catch {
       console.error('order-reconciliation', order.id)
     }
-  }
-}
-
-export async function settleOrderRefund(tx: Prisma.TransactionClient, account: string, refund: Stripe.Refund) {
-  const orderId = refund.metadata?.orderId
-  const paymentIntentId = typeof refund.payment_intent === 'string' ? refund.payment_intent : refund.payment_intent?.id
-  if (!orderId || !paymentIntentId || refund.status !== 'succeeded' || refund.currency !== 'brl') return
-  const order = await tx.shopOrder.findFirst({
-    where: { id: orderId, paymentIntentId, tenant: { stripeAccountId: account }, cents: refund.amount, status: 'PAID' }
-  })
-  if (!order) return
-  const changed = await tx.shopOrder.updateMany({
-    where: { id: orderId, status: 'PAID' }, data: { status: 'REFUNDED', refundedAt: new Date() }
-  })
-  if (!changed.count) return
-  const items = await tx.shopOrderItem.findMany({ where: { orderId, tenantId: order.tenantId }, orderBy: { productId: 'asc' } })
-  for (const item of items) {
-    await tx.product.update({ where: { tenantId_id: { tenantId: order.tenantId, id: item.productId } }, data: { stock: { increment: item.quantity } } })
   }
 }

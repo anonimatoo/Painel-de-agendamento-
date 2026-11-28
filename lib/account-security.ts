@@ -49,7 +49,7 @@ export async function consumeAccountToken(token: string, purpose: TokenPurpose, 
 }
 
 export async function sendAccountLink(user: { id: string; email: string }, purpose: TokenPurpose) {
-  if (!mailConfigured()) throw new Error('E-mail transacional indisponível')
+  if (!(await mailConfigured())) throw new Error('E-mail transacional indisponível')
   const token = await issueAccountToken(user.id, purpose)
   const url = new URL('/conta', process.env.APP_URL)
   url.searchParams.set('token', token)

@@ -1,7 +1,7 @@
 import { db } from './db'
-import { settleOrderRefund } from './orders'
+import { applyConnectedRefund } from './connected-refunds'
 import { checkoutMethods, failedCheckout } from './checkout-method'
-import { recordAppointmentRefund, settleAppointment, stripe } from './stripe'
+import { settleAppointment, stripe } from './stripe'
 import { AgendaError } from './agenda'
 import { createConnectAccount, createConnectOnboardingLink, readConnectStatus } from './connect-accounts'
 import { stripeClient, stripeConfiguration } from './stripe-settings'
@@ -60,7 +60,8 @@ export async function startConnectOnboarding(
 
 export async function refundAppointment(tenantId: string, appointmentId: string) {
   const item = await db.appointment.findFirst({
-    where: { id: appointmentId, tenantId, status: 'CONFIRMED', paidAt: { not: null } },
+    where: { id: appointmentId, tenantId, paidAt: { not: null }, refundedAt: null, refundRequest: { is: null },
+      OR: [{ status: 'CONFIRMED' }, { status: 'CANCELED', checkoutState: 'REVIEW' }] },
     include: { tenant: true }
   })
   const account = item?.checkoutAccountId ?? item?.tenant.stripeAccountId
@@ -68,13 +69,16 @@ export async function refundAppointment(tenantId: string, appointmentId: string)
   const api = await stripe()
   const session = await api.checkout.sessions.retrieve(item.checkoutId, { stripeAccount: account })
   const intent = typeof session.payment_intent === 'string' ? session.payment_intent : session.payment_intent?.id
-  if (!intent || session.payment_status !== 'paid') throw new AgendaError('O pagamento ainda não pode ser estornado.')
+  if (!intent || (item.paymentIntentId && intent !== item.paymentIntentId) || session.payment_status !== 'paid' ||
+      session.currency !== 'brl' || session.amount_total !== (item.chargeCents ?? item.cents)) throw new AgendaError('O pagamento ainda não pode ser estornado.')
+  if (!item.paymentIntentId) {
+    await db.appointment.updateMany({ where: { id: appointmentId, tenantId, paymentIntentId: null }, data: { paymentIntentId: intent } })
+  }
   const refund = await api.refunds.create({
     payment_intent: intent, refund_application_fee: item.platformFeeCents > 0 || undefined, metadata: { appointmentId }
   }, { stripeAccount: account, idempotencyKey: 'appointment-refund:' + appointmentId })
-  if (refund.status === 'succeeded') {
-    await db.$transaction(tx => recordAppointmentRefund(tx, tenantId, appointmentId))
-  } else if (refund.status !== 'pending' && refund.status !== 'requires_action') {
+  await db.$transaction(tx => applyConnectedRefund(tx, account, refund))
+  if (refund.status !== 'succeeded' && refund.status !== 'pending' && refund.status !== 'requires_action') {
     throw new AgendaError('O estorno não foi aprovado. Consulte a situação na Stripe.')
   }
 }
@@ -152,14 +156,15 @@ export async function reconcileAppointments() {
 
 export async function refundOrder(tenantId: string, orderId: string) {
   const order = await db.shopOrder.findFirst({
-    where: { tenantId, id: orderId, status: 'PAID' }, include: { tenant: { select: { stripeAccountId: true } } }
+    where: { tenantId, id: orderId, paidAt: { not: null }, refundedAt: null,
+      OR: [{ status: 'PAID' }, { status: 'CANCELED', paymentReview: true }] }, include: { tenant: { select: { stripeAccountId: true } } }
   })
   const account = order?.tenant.stripeAccountId
   if (!order?.paymentIntentId || !account) throw new AgendaError('O pedido ainda não pode ser estornado.')
   const refund = await (await stripe()).refunds.create({ payment_intent: order.paymentIntentId, refund_application_fee: order.platformFeeCents > 0 || undefined, metadata: { orderId } },
     { stripeAccount: account, idempotencyKey: 'order-refund:' + orderId })
-  if (refund.status === 'succeeded') await db.$transaction(tx => settleOrderRefund(tx, account, refund))
-  else if (refund.status !== 'pending' && refund.status !== 'requires_action') throw new AgendaError('O estorno não foi aprovado.')
+  await db.$transaction(tx => applyConnectedRefund(tx, account, refund))
+  if (refund.status !== 'succeeded' && refund.status !== 'pending' && refund.status !== 'requires_action') throw new AgendaError('O estorno não foi aprovado.')
 }
 
 export async function changeConnectAvailability(tenantId: string, actorId: string, pause: boolean) {

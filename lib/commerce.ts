@@ -49,18 +49,23 @@ export function cashPeriod(zone: string, from?: string, to?: string) {
 }
 
 export async function cashReport(tenantId: string, zone: string, period = cashPeriod(zone)!) {
-  const [entries, movements, payments, refunds, orders, orderRefunds] = await Promise.all([
+  const [entries, movements, payments, refunds, orders, orderRefunds, connectedRefunds] = await Promise.all([
     db.financialEntry.findMany({ where: { tenantId, OR: [{ dueAt: period }, { paidAt: period }, { paidAt: null }] } }),
     db.stockMovement.findMany({ where: { tenantId, kind: { in: ['SALE', 'REVERSAL'] }, createdAt: period }, include: { product: { select: { name: true } } } }),
     db.appointment.findMany({ where: { tenantId, paidAt: period }, select: { paidAt: true, chargeCents: true, cents: true, checkoutMethod: true } }),
-    db.appointment.findMany({ where: { tenantId, refundedAt: period }, select: { refundedAt: true, chargeCents: true, cents: true } }),
+    db.appointment.findMany({ where: { tenantId, refundedAt: period, connectedRefunds: { none: { state: 'succeeded' } } }, select: { refundedAt: true, chargeCents: true, cents: true } }),
     db.shopOrder.findMany({ where: { tenantId, paidAt: period }, select: { paidAt: true, cents: true, checkoutMethod: true } }),
-    db.shopOrder.findMany({ where: { tenantId, refundedAt: period }, select: { refundedAt: true, cents: true } })
+    db.shopOrder.findMany({ where: { tenantId, refundedAt: period, connectedRefunds: { none: { state: 'succeeded' } } }, select: { refundedAt: true, cents: true } }),
+    db.connectedRefund.findMany({
+      where: { succeededAt: period, state: 'succeeded', OR: [{ appointment: { tenantId } }, { order: { tenantId } }] },
+      select: { succeededAt: true, amount: true, orderId: true }
+    })
   ])
   const rows = [
     ...entries.filter(entry => entry.paidAt && entry.paidAt >= period.gte && entry.paidAt < period.lt)
       .map(entry => ({ date: entry.paidAt!, title: entry.title, cents: entry.kind === 'INCOME' ? entry.cents : -entry.cents })),
     ...movements.map(movement => ({ date: movement.createdAt, title: (movement.kind === 'SALE' ? 'Venda presencial · ' : 'Estorno presencial · ') + movement.product.name, cents: -movement.quantity * movement.unitCents })),
+    ...connectedRefunds.map(item => ({ date: item.succeededAt!, title: item.orderId ? 'Estorno de pedido online' : 'Estorno de agendamento', cents: -item.amount })),
     ...orderRefunds.map(order => ({ date: order.refundedAt!, title: 'Estorno de pedido online', cents: -order.cents })),
     ...orders.map(order => ({ date: order.paidAt!, title: 'Pedido online', method: order.checkoutMethod, cents: order.cents })),
     ...payments.map(payment => ({ date: payment.paidAt!, title: 'Pagamento de agendamento', method: payment.checkoutMethod, cents: payment.chargeCents ?? payment.cents })),

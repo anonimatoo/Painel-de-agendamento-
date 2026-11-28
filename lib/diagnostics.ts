@@ -1,6 +1,6 @@
 import { db } from './db'
 import { evolutionConfiguration, probeEvolution } from './evolution-settings'
-import { mailConfigured } from './mail'
+import { mailConfiguration } from './mail'
 import { checkStorage } from './storage'
 import { stripe } from './stripe'
 import { connectStatus } from './connect'
@@ -33,9 +33,11 @@ export async function diagnostics() {
       if (!config.origin || !config.key) return 'Não configurado'
       return 'Conectado · ' + await probeEvolution(config.origin, config.key) + ' instância(s)'
     }),
-    probe(mailConfigured(), async () => {
+    probe(true, async () => {
+      const config = await mailConfiguration()
+      if (!config) return 'Não configurado'
       const response = await fetch('https://api.resend.com/domains', {
-        headers: { Authorization: 'Bearer ' + process.env.RESEND_API_KEY },
+        headers: { Authorization: 'Bearer ' + config.apiKey },
         cache: 'no-store', redirect: 'error', signal: AbortSignal.timeout(6000)
       })
       if (response.status === 403) return 'Configurado · Chave sem acesso à consulta de domínios'

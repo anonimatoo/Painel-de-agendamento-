@@ -27,4 +27,5 @@ for (const source of ['billing', 'connect']) {
 assert.equal((await request('/estabelecimento/nao-cadastrado')).status, 404)
 const schedule = await request('/api/estabelecimentos/nao-cadastrado/horarios?servico=a&profissional=b&dia=2026-11-30')
 assert.equal(schedule.status, 404)
-console.log('Verificação HTTP aprovada para 10 requisições.')
+assert.equal((await request('/api/saude')).status, 204)
+console.log('Verificação HTTP aprovada para 11 requisições.')

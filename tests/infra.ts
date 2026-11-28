@@ -8,7 +8,7 @@ import { deleteMedia, readCover, storeMedia } from '../lib/storage'
 async function verifyQueue() {
   const url = new URL(process.env.REDIS_URL ?? 'redis://localhost:56379')
   const connection = {
-    host: url.hostname, port: Number(url.port || 6379), maxRetriesPerRequest: null,
+    host: url.hostname, port: Number(url.port || 6379), db: Number(url.pathname.slice(1) || '0'), maxRetriesPerRequest: null,
     username: url.username || undefined, password: url.password || undefined,
     tls: url.protocol === 'rediss:' ? {} : undefined
   }

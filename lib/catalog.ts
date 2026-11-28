@@ -59,11 +59,9 @@ export async function renameCatalogCategory(tenantId: string, name: string, oldN
   await db.$transaction(async tx => {
     await tx.$queryRaw`SELECT id FROM "Tenant" WHERE id = ${tenantId} FOR UPDATE`
     if (oldName && oldName !== name) {
-      const [products, services, categories] = await Promise.all([
-        tx.product.updateMany({ where: { tenantId, category: oldName }, data: { category: name } }),
-        tx.service.updateMany({ where: { tenantId, category: oldName }, data: { category: name } }),
-        tx.catalogCategory.deleteMany({ where: { tenantId, name: oldName } })
-      ])
+      const products = await tx.product.updateMany({ where: { tenantId, category: oldName }, data: { category: name } })
+      const services = await tx.service.updateMany({ where: { tenantId, category: oldName }, data: { category: name } })
+      const categories = await tx.catalogCategory.deleteMany({ where: { tenantId, name: oldName } })
       if (!products.count && !services.count && !categories.count) throw new AgendaError('Categoria indisponível.')
     }
     await tx.catalogCategory.upsert({ where: { tenantId_name: { tenantId, name } }, create: { tenantId, name }, update: {} })

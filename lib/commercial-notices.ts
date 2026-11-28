@@ -77,7 +77,7 @@ export function hostedInvoiceLink(value?: string | null) {
 }
 
 export async function dispatchCommercial(api: () => Promise<Stripe>, now = new Date()) {
-  if (!mailConfigured()) return
+  if (!(await mailConfigured())) return
   await db.commercialNotice.updateMany({
     where: { state: 'SENDING', claimedAt: { lt: new Date(+now - 5 * 60_000) } }, data: { state: 'REVIEW' }
   })

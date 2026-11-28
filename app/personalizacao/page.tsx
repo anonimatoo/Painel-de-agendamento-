@@ -15,7 +15,7 @@ export default async function Branding({ searchParams }: { searchParams: Promise
   const user = await userSession()
   if (!user) redirect('/login')
   const member = await membership(user.id)
-  if (!member || !can(member, 'brand.manage') || !member.tenant.active || member.tenant.suspended) redirect('/dashboard')
+  if (!member || !can(member, 'brand.manage') || member.tenant.suspended) redirect('/dashboard')
   const { tenant } = member
   const where = { tenantId: tenant.id }
   const [media, professionals, services, products, query] = await Promise.all([
@@ -30,7 +30,8 @@ export default async function Branding({ searchParams }: { searchParams: Promise
   const messages: Record<string, string> = { publicado: 'Alterações publicadas.', rascunho: 'Rascunho salvo. Visualize e publique quando estiver pronto.', dados: 'Confira os destaques e selecione até seis itens de cada tipo.', 'sem-rascunho': 'Ainda não há um rascunho para publicar.' }
   const profile = media.find(item => item.kind === 'PROFILE')?.key
   return <MerchantShell member={member} current="/personalizacao">
-    <h1>Personalização</h1><ErrorNote error={query.erro} />
+    <h1>Personalização</h1>
+    {!tenant.active && <p role="status">Prepare sua página antes de assinar. A prévia é privada e as reservas ficam indisponíveis até a ativação.</p>}<ErrorNote error={query.erro} />
     <article><h2>Página pública</h2><form action={brandSettings.bind(null, 'profile')}>
       <Field label="Nome comercial" name="name" value={tenant.name} />
       <label>Descrição<textarea name="description" maxLength={1000} defaultValue={tenant.description} /></label>
@@ -74,7 +75,7 @@ export default async function Branding({ searchParams }: { searchParams: Promise
         </div>
         <div className="inline"><button name="command" value="save">Salvar rascunho</button><Link className="button outline" href={publicPath + '?previa=1'}>Visualizar página</Link></div>
       </form>
-      {tenant.publicDesignDraft !== null && <form action={updatePublicDesign}><button name="command" value="publish">Publicar</button></form>}
+      {tenant.active && tenant.publicDesignDraft !== null && <form action={updatePublicDesign}><button name="command" value="publish">Publicar</button></form>}
     </article>
     <article><h2>Prévia da apresentação</h2>
       <nav className="row" aria-label="Tamanho da prévia"><Link href="/personalizacao?visual=computador">Computador</Link><Link href="/personalizacao?visual=celular">Celular</Link></nav>
@@ -84,7 +85,7 @@ export default async function Branding({ searchParams }: { searchParams: Promise
         {profile && <img width={96} height={96} className="profile-logo" src={'/api/imagens/' + profile} alt="" />}
         <h2>{tenant.name}</h2><p>{tenant.description}</p><p>{tenant.address}</p>
       </section>
-      <Link href={publicPath}>Visualizar página publicada</Link>
+      {tenant.active && <Link href={publicPath}>Visualizar página publicada</Link>}
     </article>
   </MerchantShell>
 }

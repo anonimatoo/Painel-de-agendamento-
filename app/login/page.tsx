@@ -24,6 +24,7 @@ export default async function Login({ searchParams }: {
     {providers.length > 0 && <div className={styles.authSocial}>
       <p className={styles.divider}>ou entre com</p><SocialButtons providers={providers} />
     </div>}
+    {!admin && providers.length < 2 && <p>Se Google ou Apple não aparecer, continue com seu e-mail.</p>}
     <div className={styles.authBottom}>
       {admin ? <Link href="/login">Acesso do comerciante</Link> : <>
         <p>Não tem conta? <Link href="/cadastro">Criar conta</Link></p>

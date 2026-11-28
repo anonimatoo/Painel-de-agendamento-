@@ -68,6 +68,7 @@ model Tenant {
   media MediaAsset[]
   timezone String @default("America/Sao_Paulo")
   active Boolean @default(false)
+  draftBillingCycle String @default("monthly")
   suspended Boolean @default(false)
   stripeCustomerId String? @unique
   billingCheckout BillingCheckout?
@@ -104,10 +105,16 @@ model Tenant {
   consumerProfiles ConsumerProfile[]
   consumerNoticeHours Int?
   automaticAppointmentRefunds Boolean @default(false)
+  suppliers Supplier[]
+  offers CommercialOffer[]
+  automationRules AutomationRule[]
   products Product[]
   catalogCategories CatalogCategory[]
   financialEntries FinancialEntry[]
   orders ShopOrder[]
+  campaigns Campaign[]
+  holidays StoreHoliday[]
+  loyaltyEnabled Boolean @default(false)
   appointments Appointment[]
   subscriptions Subscription[]
   createdAt DateTime @default(now())
@@ -199,6 +206,7 @@ model Product {
   category String @default("")
   description String @default("")
   sku String?
+  barcode String?
   published Boolean @default(true)
   archivedAt DateTime?
   variantOfId String?
@@ -211,6 +219,8 @@ model Product {
   stock Int
   movements StockMovement[]
   orderItems ShopOrderItem[]
+  purchases Purchase[]
+  offers CommercialOffer[]
   @@index([tenantId])
   @@index([tenantId, variantOfId])
   @@unique([tenantId, id])
@@ -256,11 +266,14 @@ model FinancialEntry {
   tenantId String
   tenant Tenant @relation(fields: [tenantId], references: [id])
   kind EntryKind
+  classification String @default("GENERAL")
   title String
   cents Int
   dueAt DateTime
   paidAt DateTime?
+  purchase Purchase?
   createdAt DateTime @default(now())
+  @@unique([tenantId, id])
   @@index([tenantId, dueAt])
   @@index([tenantId, paidAt])
 }
@@ -295,11 +308,13 @@ model Appointment {
   checkoutAccountId String?
   checkoutState String?
   paymentToken String? @unique
+  automationRuns AutomationRun[]
   reminders Reminder[]
   history AppointmentHistory[]
   refundRequest AppointmentRefundRequest?
   connectedRefunds ConnectedRefund[]
   createdAt DateTime @default(now())
+  @@unique([tenantId, id])
   @@index([tenantId, startsAt])
   @@index([tenantId, consumerUserId, startsAt])
 }
@@ -351,6 +366,7 @@ model Reminder {
   providerMessageId String?
   recipientPhone String?
   dedupeKey String? @unique
+  automationRuns AutomationRun[]
   @@unique([appointmentId, runAt, kind])
   @@index([sentAt, runAt])
 }
@@ -475,6 +491,7 @@ model MediaAsset {
   target String
   key String @unique
   bytes Int
+  position Int?
   createdAt DateTime @default(now())
   @@unique([tenantId, kind, target])
 }
@@ -490,6 +507,9 @@ model ShopOrder {
   id String @id @default(cuid())
   tenantId String
   tenant Tenant @relation(fields: [tenantId], references: [id])
+  offerId String?
+  offerSelection String?
+  offer CommercialOffer? @relation(fields: [tenantId, offerId], references: [tenantId, id], onDelete: Restrict)
   requestId String
   customerName String
   phone String
@@ -505,9 +525,12 @@ model ShopOrder {
   expiresAt DateTime
   paidAt DateTime?
   refundedAt DateTime?
+  recognizedSale Boolean?
+  stockReturnedAt DateTime?
   createdAt DateTime @default(now())
   items ShopOrderItem[]
   connectedRefunds ConnectedRefund[]
+  @@index([tenantId, stockReturnedAt])
   @@unique([tenantId, requestId])
   @@unique([tenantId, id])
   @@index([status, expiresAt])
@@ -521,6 +544,8 @@ model ShopOrderItem {
   quantity Int
   name String
   unitCents Int
+  unitCostCents Int?
+  discountCents Int @default(0)
   order ShopOrder @relation(fields: [tenantId, orderId], references: [tenantId, id], onDelete: Cascade)
   product Product @relation(fields: [tenantId, productId], references: [tenantId, id])
   @@id([orderId, productId])
@@ -568,6 +593,7 @@ model ProfessionalCommission {
   appointment Appointment @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
   cents Int
   paidAt DateTime?
+  paymentReference String?
   createdAt DateTime @default(now())
 }
 
@@ -673,6 +699,14 @@ model ConsumerProfile {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
   appointments Appointment[]
   orders ShopOrder[]
+  marketingEmail String?
+  marketingEmailAt DateTime?
+  marketingPhone String?
+  marketingPhoneAt DateTime?
+  marketingPhoneCode String?
+  marketingPhoneCodeUntil DateTime?
+  deliveries CampaignDelivery[]
+  loyaltyRewards LoyaltyReward[]
 
   @@id([tenantId, userId])
   @@index([userId])
@@ -722,4 +756,141 @@ model MailSetting {
   sender String
   encryptedKey String
   updatedAt DateTime @updatedAt
+}
+
+model AutomationRule {
+  id String @id @default(cuid())
+  tenantId String
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name String
+  trigger String
+  graph Json
+  enabled Boolean @default(false)
+  revision Int @default(1)
+  updatedAt DateTime @updatedAt
+  runs AutomationRun[]
+  @@unique([tenantId, id])
+  @@index([tenantId, enabled, trigger])
+}
+
+model AutomationRun {
+  id String @id @default(cuid())
+  tenantId String
+  ruleId String
+  revision Int
+  appointmentId String
+  startsAt DateTime
+  trigger String
+  createdAt DateTime @default(now())
+  state String @default("QUEUED")
+  reminderId String?
+  reminder Reminder? @relation(fields: [reminderId], references: [id], onDelete: SetNull)
+  rule AutomationRule @relation(fields: [tenantId, ruleId], references: [tenantId, id], onDelete: Restrict)
+  appointment Appointment @relation(fields: [tenantId, appointmentId], references: [tenantId, id], onDelete: Cascade)
+  @@unique([ruleId, revision, appointmentId, startsAt, trigger])
+  @@index([state, createdAt])
+  @@index([tenantId, createdAt])
+  @@index([reminderId])
+}
+
+model Supplier {
+  id String @id @default(cuid())
+  tenantId String
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  name String
+  contact String @default("")
+  createdAt DateTime @default(now())
+  purchases Purchase[]
+  @@unique([tenantId, id])
+  @@unique([tenantId, name])
+}
+
+model Purchase {
+  id String @id @default(cuid())
+  tenantId String
+  supplierId String
+  productId String
+  quantity Int
+  unitCostCents Int
+  requestId String
+  reference String
+  receivedAt DateTime @default(now())
+  supplier Supplier @relation(fields: [tenantId, supplierId], references: [tenantId, id], onDelete: Restrict)
+  product Product @relation(fields: [tenantId, productId], references: [tenantId, id], onDelete: Restrict)
+  expenseId String @unique
+  expense FinancialEntry @relation(fields: [tenantId, expenseId], references: [tenantId, id], onDelete: Restrict)
+  @@unique([tenantId, requestId])
+  @@unique([tenantId, expenseId])
+  @@index([tenantId, receivedAt])
+}
+
+model CommercialOffer {
+  id String @id @default(cuid())
+  tenantId String
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  kind String
+  name String
+  code String?
+  bps Int
+  startsAt DateTime
+  endsAt DateTime
+  enabled Boolean @default(true)
+  productId String?
+  product Product? @relation(fields: [tenantId, productId], references: [tenantId, id], onDelete: Restrict)
+  items Json?
+  orders ShopOrder[]
+  @@unique([tenantId, id])
+  @@unique([tenantId, code])
+  @@index([tenantId, kind, enabled, startsAt, endsAt])
+}
+
+model StoreHoliday {
+  tenantId String
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  date String
+  name String
+  @@id([tenantId, date])
+}
+
+model Campaign {
+  id String @id @default(cuid())
+  tenantId String
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  channel String
+  title String
+  body String
+  createdAt DateTime @default(now())
+  deliveries CampaignDelivery[]
+  @@unique([tenantId, id])
+  @@index([tenantId, createdAt])
+}
+
+model CampaignDelivery {
+  id String @id @default(cuid())
+  tenantId String
+  campaignId String
+  userId String
+  campaign Campaign @relation(fields: [tenantId, campaignId], references: [tenantId, id], onDelete: Cascade)
+  consumer ConsumerProfile @relation(fields: [tenantId, userId], references: [tenantId, userId], onDelete: Cascade)
+  state String @default("QUEUED")
+  createdAt DateTime @default(now())
+  claimedAt DateTime?
+  @@unique([campaignId, userId])
+  @@index([state, createdAt])
+}
+
+model LoyaltyReward {
+  tenantId String
+  userId String
+  sequence Int
+  redeemedAt DateTime @default(now())
+  consumer ConsumerProfile @relation(fields: [tenantId, userId], references: [tenantId, userId], onDelete: Cascade)
+  @@id([tenantId, userId, sequence])
+}
+
+model MediaCleanup {
+  key String @id
+  attempts Int @default(0)
+  nextAt DateTime @default(now())
+  @@index([nextAt])
 }

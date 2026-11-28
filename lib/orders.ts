@@ -4,40 +4,70 @@ import { failedCheckout, pixMinimumCents } from './checkout-method'
 import { AgendaError } from './agenda'
 import { platformFee } from './commission'
 import { db } from './db'
+import { centsWithDiscount, comboItems } from './offers'
 
-export async function reserveOrder(input: { tenantId: string; requestId: string; checkoutMethod?: CheckoutMethod; consumerUserId?: string; name: string; phone: string; cart: { productId: string; quantity: number }[] }) {
-  const { tenantId, requestId, checkoutMethod = 'card', consumerUserId, name, phone, cart } = input
-  const requested = new Map(cart.map(item => [item.productId, item.quantity]))
-  if (!cart.length || requested.size !== cart.length || cart.length > 30 || cart.some(item => !Number.isInteger(item.quantity) || item.quantity < 1 || item.quantity > 100)) {
+export async function reserveOrder(input: { tenantId: string; requestId: string; checkoutMethod?: CheckoutMethod; consumerUserId?: string; name: string; phone: string; cart: { productId: string; quantity: number }[]; offer?: { kind: 'COUPON' | 'COMBO'; value: string }; requireActive?: boolean }) {
+  const { tenantId, requestId, checkoutMethod = 'card', consumerUserId, name, phone, cart, offer } = input
+  const selection = offer ? offer.kind + ':' + offer.value : null
+  if (cart.length > 30 || (!cart.length && offer?.kind !== 'COMBO') ||
+      new Set(cart.map(item => item.productId)).size !== cart.length ||
+      cart.some(item => !Number.isInteger(item.quantity) || item.quantity < 1 || item.quantity > 100)) {
     throw new AgendaError('Confira as quantidades do carrinho.')
   }
   return db.$transaction(async tx => {
     await tx.$queryRaw`SELECT id FROM "Tenant" WHERE id = ${tenantId} FOR UPDATE`
-    const existing = await tx.shopOrder.findUnique({ where: { tenantId_requestId: { tenantId, requestId } }, include: { items: true } })
+    const tenant = await tx.tenant.findUniqueOrThrow({ where: { id: tenantId }, select: {
+      active: true, suspended: true, connectPausedAt: true, pixCheckoutEnabled: true, stripeAccountId: true
+    } })
+    if (input.requireActive && (!tenant.active || tenant.suspended || !tenant.stripeAccountId)) {
+      throw new AgendaError('Compras online indisponíveis.')
+    }
+    const existing = await tx.shopOrder.findUnique({
+      where: { tenantId_requestId: { tenantId, requestId } }, include: { items: true, offer: true }
+    })
+    const now = new Date()
+    const live = { tenantId, enabled: true, startsAt: { lte: now }, endsAt: { gt: now } }
+    const selected = existing?.offer ?? (offer ? await tx.commercialOffer.findFirst({
+      where: { ...live, kind: offer.kind, ...(offer.kind === 'COUPON' ? { code: offer.value } : { id: offer.value }) }
+    }) : null)
+    if (offer && !selected) throw new AgendaError('Oferta indisponível. Confira a vigência e o código.')
+    const bundled = selected?.kind === 'COMBO' ? comboItems.parse(selected.items) : []
+    const requested = new Map(cart.map(item => [item.productId, item.quantity]))
+    for (const item of bundled) requested.set(item.productId, (requested.get(item.productId) ?? 0) + item.quantity)
+    if (requested.size > 30 || [...requested.values()].some(quantity => quantity > 100)) throw new AgendaError('O pedido excede o limite de itens.')
     if (existing) {
-      if (existing.checkoutMethod !== checkoutMethod || existing.consumerUserId !== (consumerUserId ?? null) || existing.phone !== phone || existing.customerName !== name || existing.items.length !== requested.size ||
-        existing.items.some(item => requested.get(item.productId) !== item.quantity)) throw new AgendaError('Atualize a página antes de iniciar um novo pedido.')
+      if (existing.offerSelection !== selection || existing.checkoutMethod !== checkoutMethod ||
+          existing.consumerUserId !== (consumerUserId ?? null) || existing.phone !== phone ||
+          existing.customerName !== name || existing.items.length !== requested.size ||
+          existing.items.some(item => requested.get(item.productId) !== item.quantity)) {
+        throw new AgendaError('Atualize a página antes de iniciar um novo pedido.')
+      }
       return existing
     }
-    const tenant = await tx.tenant.findUniqueOrThrow({ where: { id: tenantId }, select: { connectPausedAt: true, pixCheckoutEnabled: true } })
     if (tenant.connectPausedAt || (checkoutMethod === 'pix' && !tenant.pixCheckoutEnabled)) throw new AgendaError('Os pagamentos online estão indisponíveis.')
+    const promotions = await tx.commercialOffer.findMany({ where: { ...live, kind: 'PROMOTION', productId: { in: [...requested.keys()] } } })
+    const bundleQuantities = new Map(bundled.map(item => [item.productId, item.quantity]))
+    const discountBps = selected?.bps ?? 0
     const items = []
-    for (const line of [...cart].sort((first, second) => first.productId.localeCompare(second.productId))) {
-      const { productId, quantity } = line
+    for (const [productId, quantity] of [...requested.entries()].sort(([first], [second]) => first.localeCompare(second))) {
       await tx.$queryRaw`SELECT id FROM "Product" WHERE id = ${productId} AND "tenantId" = ${tenantId} FOR UPDATE`
       const product = await tx.product.findUnique({ where: { tenantId_id: { tenantId, id: productId } } })
       if (!product || !product.published || product.archivedAt || product.stock < quantity || (product.promotionCents ?? product.cents) < 1) {
         throw new AgendaError('Um item do carrinho ficou indisponível. Atualize a página e confira as quantidades.')
       }
       await tx.product.update({ where: { tenantId_id: { tenantId, id: productId } }, data: { stock: { decrement: quantity } } })
-      items.push({ tenantId, productId, quantity, name: product.name, unitCents: product.promotionCents ?? product.cents })
+      const scheduledBps = Math.max(0, ...promotions.filter(offer => offer.productId === productId).map(offer => offer.bps))
+      const unitCents = Math.min(product.promotionCents ?? product.cents, centsWithDiscount(product.cents, scheduledBps))
+      const discountedQuantity = offer?.kind === 'COMBO' ? bundleQuantities.get(productId) ?? 0 : quantity
+      const discountCents = discountedQuantity * (unitCents - centsWithDiscount(unitCents, discountBps))
+      items.push({ tenantId, productId, quantity, name: product.name, unitCents, discountCents, unitCostCents: product.costCents })
     }
-    const cents = items.reduce((sum, item) => sum + item.quantity * item.unitCents, 0)
+    const cents = items.reduce((sum, item) => sum + item.quantity * item.unitCents - item.discountCents, 0)
     if (checkoutMethod === 'pix' && cents < pixMinimumCents) throw new AgendaError('O total para Pix deve ser de pelo menos R$ 0,50.')
     if (cents > 9_999_999) throw new AgendaError('O total excede o limite de um pedido.')
     return tx.shopOrder.create({
       data: {
-        tenantId, requestId, checkoutMethod, consumerUserId, cents, platformFeeCents: await platformFee(tx, tenantId, cents), customerName: name, phone,
+        tenantId, requestId, checkoutMethod, consumerUserId, cents, offerId: selected?.id, offerSelection: selection, platformFeeCents: await platformFee(tx, tenantId, cents), customerName: name, phone,
         expiresAt: new Date(Math.floor(Date.now() / 1000) * 1000 + 35 * 60_000),
         items: { createMany: { data: items.map(({ tenantId: _tenantId, ...item }) => item) } }
       }, include: { items: true }
@@ -64,14 +94,14 @@ export async function settleOrder(tx: Prisma.TransactionClient, account: string,
   if (order.status === 'CANCELED') {
     if (approved) await tx.shopOrder.updateMany({
       where: { id: order.id, status: 'CANCELED', paidAt: null },
-      data: { paymentReview: true, checkoutId: session.id, paymentIntentId, paidAt: new Date() }
+      data: { paymentReview: true, recognizedSale: false, checkoutId: session.id, paymentIntentId, paidAt: new Date() }
     })
     return
   }
   if (approved) {
     await tx.shopOrder.updateMany({
       where: { id: order.id, status: 'PENDING' },
-      data: { status: 'PAID', paymentReview: false, paidAt: new Date(), paymentIntentId, checkoutId: session.id }
+      data: { status: 'PAID', paymentReview: false, recognizedSale: true, paidAt: new Date(), paymentIntentId, checkoutId: session.id }
     })
   } else if (expired && session.payment_status !== 'paid') {
     await cancelOrder(tx, order.tenantId, order.id)

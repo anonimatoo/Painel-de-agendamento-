@@ -3,13 +3,15 @@ import { redirect } from 'next/navigation'
 import { userSession } from '@/lib/auth'
 import { db } from '@/lib/db'
 import { diagnostics } from '@/lib/diagnostics'
+import { socialProviderReadiness } from '@/lib/social-auth'
 import { saveEvolutionSettings } from '../actions'
 import { Brand, ErrorNote, Field } from '../ui'
 
 export default async function Diagnostics({ searchParams }: { searchParams: Promise<{ erro?: string }> }) {
   const user = await userSession()
   if (!user?.platformAdmin || !user.adminMfaVerified) redirect('/login')
-  const checks = await diagnostics()
+  const [checks, providers] = await Promise.all([diagnostics(), socialProviderReadiness()])
+  checks.push(...providers.map(row => ({ name: row.provider === 'google' ? 'Login com Google' : 'Entrar com Apple', status: row.status })))
   const saved = await db.evolutionSetting.findUnique({
     where: { id: 1 }, select: { endpoint: true, qrEnabled: true, checkedAt: true }
   }).catch(() => null)

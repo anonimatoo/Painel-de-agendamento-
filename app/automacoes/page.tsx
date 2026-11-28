@@ -46,13 +46,13 @@ export default async function Automations({ searchParams }: { searchParams: Prom
     })),
     ...reminders.map(row => ({
       id: row.id, appointment: row.appointmentId, date: row.sentAt ?? row.runAt,
-      title: row.kind === 'MERCHANT_CONFIRMED' ? 'WhatsApp do comerciante' : 'WhatsApp do consumidor · ' + (row.kind === 'MANUAL_REMINDER' ? 'Lembrete manual' : messageLabels[row.kind as keyof typeof messageLabels] ?? row.kind),
+      title: row.kind === 'MERCHANT_CONFIRMED' ? 'WhatsApp do comerciante' : 'WhatsApp do consumidor · ' + (row.kind === 'CS_AUTOMATION' ? 'Lembrete do CS Automation Pro' : row.kind === 'MANUAL_REMINDER' ? 'Lembrete manual' : messageLabels[row.kind as keyof typeof messageLabels] ?? row.kind),
       service: row.appointment.service.name, state: row.deliveryState === 'SENT' ? (row.providerMessageId ? 'Aceito pelo provedor' : 'Sem confirmação do provedor') : deliveryLabels[row.deliveryState] ?? 'Em verificação', tone: row.deliveryState === 'SENT' && !row.providerMessageId ? 'REVIEW' : row.deliveryState, message: true
     }))
   ].sort((a, b) => +b.date - +a.date).slice(0, 100)
   const date = (value: Date) => new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short', timeZone: tenant.timezone }).format(value)
   return <MerchantShell member={member} current="/automacoes">
-    <section className="workspace-heading"><div><h1><Zap aria-hidden /> Central de automações</h1><p>Acompanhe reservas, pagamentos e mensagens do estabelecimento.</p></div>{can(member, 'finance.read') && <Link className="button outline" href="/recebimentos">Conciliar pagamentos</Link>}</section>
+    <section className="workspace-heading"><div><h1><Zap aria-hidden /> Central de automações</h1><p>Acompanhe reservas, pagamentos e mensagens do estabelecimento.</p></div>{send && <Link className="button" href="/automacoes/editor">CS Automation Pro</Link>}{can(member, 'finance.read') && <Link className="button outline" href="/recebimentos">Conciliar pagamentos</Link>}</section>
     {estado && messages[estado] && <p role="status" className={estado === 'telefone' || estado === 'indisponivel' ? 'error' : 'success'}>{messages[estado]}</p>}
     <div className="consumer-panels">
       <article className="commercial-panel"><h2><Clock aria-hidden /> Linha do tempo</h2>

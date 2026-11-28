@@ -2,7 +2,7 @@ import { DateTime } from 'luxon'
 import { AgendaError } from './agenda'
 import { db } from './db'
 
-export async function changeStock(input: { tenantId: string; productId: string; quantity: number; requestId: string; sale: boolean }) {
+export async function changeStock(input: { tenantId: string; productId: string; quantity: number; requestId: string; sale: boolean; expectedStock?: number }) {
   const { tenantId, productId, requestId, sale } = input
   const quantity = sale ? -Math.abs(input.quantity) : input.quantity
   return db.$transaction(async tx => {
@@ -13,7 +13,8 @@ export async function changeStock(input: { tenantId: string; productId: string; 
       return prior
     }
     const product = await tx.product.findUnique({ where: { tenantId_id: { tenantId, id: productId } } })
-    if (!product) throw new AgendaError('Produto indisponível.')
+    if (!product || (input.expectedStock !== undefined && product.archivedAt)) throw new AgendaError('Produto indisponível.')
+    if (input.expectedStock !== undefined && product.stock !== input.expectedStock) throw new AgendaError('O estoque mudou. Atualize a página e refaça a contagem.')
     if (product.stock + quantity < 0 || product.stock + quantity > 1_000_000) throw new AgendaError('Quantidade incompatível com o estoque disponível.')
     await tx.product.update({ where: { tenantId_id: { tenantId, id: productId } }, data: { stock: { increment: quantity } } })
     return tx.stockMovement.create({ data: {

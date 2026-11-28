@@ -1,3 +1,4 @@
+import { businessSuitePlanId } from '@/lib/plans'
 import Link from 'next/link'
 import { db } from '@/lib/db'
 import { Brand, brl } from '../ui'
@@ -10,6 +11,7 @@ export default async function Plans() {
     <h1>Planos</h1>
     {plans.length ? <section className="grid">{plans.map(plan => <article key={plan.id}>
       <h2>{plan.name}</h2><p>{plan.description}</p><p><strong>{brl(plan.monthlyCents)}</strong> por mês</p><p>{brl(plan.annualCents)} por ano</p>
+      {plan.id === businessSuitePlanId && <p>Até 10 fotos por produto no mensal e até 30 no anual.</p>}
       <Link href="/cadastro" className="button">Criar conta</Link>
     </article>)}</section> : <p>As assinaturas ainda não estão disponíveis.</p>}
   </main></div>

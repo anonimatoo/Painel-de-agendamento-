@@ -13,7 +13,7 @@ import { changeStock, reverseSale } from '@/lib/commerce'
 import { Prisma } from '@prisma/client'
 import { db } from '@/lib/db'
 import { endSession, membership, startSession, userSession, verifyPassword } from '@/lib/auth'
-import { changePlanAvailability, savePlan } from '@/lib/plans'
+import { businessSuitePlan, businessSuitePlanId, changePlanAvailability, savePlan } from '@/lib/plans'
 import { AgendaError, blockSchedule, book, closeAppointment, dayBounds, localDateTime, removeWorkHours, rescheduleAppointment, saveWorkHours } from '@/lib/agenda'
 import { checkStripeConnection, pauseStripePayments, saveStripeConfiguration, StripeSettingsError, stripeForNewPayments } from '@/lib/stripe-settings'
 import { stripeSettingsForm, type StripeSettingsFormState } from '@/lib/stripe-settings-form'
@@ -187,7 +187,8 @@ export async function manage(operation: string, form: FormData) {
       if (await mailConfigured() && !user.emailVerifiedAt) throw new AgendaError('Confirme seu e-mail antes de contratar uma assinatura.')
       return subscriptionCheckout({ tenantId, email: user.email, origin: base(), ...pay.parse(body) })
     }
-    if (!tenant.active || tenant.suspended) throw new AgendaError('Seu estabelecimento precisa de uma assinatura ativa.')
+    const preSubscription = ['cover', 'service', 'professional', 'assignment', 'hours', 'hours-edit', 'hours-remove', 'professional-edit', 'product'].includes(operation)
+    if (tenant.suspended || (!tenant.active && !preSubscription)) throw new AgendaError('Seu estabelecimento precisa de uma assinatura ativa.')
     const scopes: Record<string, Permission> = {
       settings: 'settings.manage', booking: 'agenda.create', cover: 'brand.manage', service: 'service.manage', professional: 'team.professionals',
       assignment: 'team.professionals', hours: 'team.professionals', 'hours-edit': 'team.professionals', 'hours-remove': 'team.professionals', 'professional-edit': 'team.professionals', customer: 'customer.create',
@@ -228,7 +229,7 @@ export async function manage(operation: string, form: FormData) {
         break
       }
       case 'service':
-        await db.service.create({ data: { tenantId, ...z.object({ name: title, description: text, cents, duration: z.coerce.number().int().min(5).max(720) }).parse(body) } })
+        await db.service.create({ data: { tenantId, active: tenant.active, ...z.object({ name: title, description: text, cents, duration: z.coerce.number().int().min(5).max(720) }).parse(body) } })
         break
       case 'professional':
         await db.professional.create({ data: { tenantId, ...z.object({ name: title }).parse(body) } })
@@ -255,7 +256,7 @@ export async function manage(operation: string, form: FormData) {
         await db.customer.create({ data: { tenantId, ...z.object({ name: title, phone }).parse(body) } })
         break
       case 'product':
-        await db.product.create({ data: { tenantId, ...z.object({ name: title, cents, stock: z.coerce.number().int().min(0).max(1_000_000) }).parse(body) } })
+        await db.product.create({ data: { tenantId, published: tenant.active, ...z.object({ name: title, cents, stock: z.coerce.number().int().min(0).max(1_000_000) }).parse(body) } })
         break
       case 'appointment': {
         const data = z.object({ id, status: z.enum(['COMPLETED', 'CANCELED', 'NO_SHOW']) }).parse(body)
@@ -311,6 +312,11 @@ export async function brandSettings(operation: 'profile' | 'upload' | 'delete' |
     const member = await membership(user.id)
     if (!member || !can(member, 'brand.manage') || member.tenant.suspended) return '/dashboard'
     const tenantId = member.tenantId
+    const requireMediaPermission = (kind: string) => {
+      const scope = kind === 'PRODUCT' ? 'product.manage' : kind === 'SERVICE' ? 'service.manage'
+        : kind === 'PROFESSIONAL' ? 'team.professionals' : null
+      if (scope && !can(member, scope)) throw new AgendaError('Você não pode gerenciar a foto deste item.')
+    }
     if (operation === 'profile') {
       const values = z.object({
         theme: z.enum(['light', 'dark']), policies: text,
@@ -327,24 +333,29 @@ export async function brandSettings(operation: 'profile' | 'upload' | 'delete' |
       await changePublicAddress(tenantId, slug.parse(form.get('slug')))
     } else if (operation === 'upload') {
       const kind = z.enum(['LOGO', 'PROFILE', 'BANNER', 'COVER', 'PROFESSIONAL', 'SERVICE', 'PRODUCT', 'GALLERY']).parse(form.get('kind'))
+      requireMediaPermission(kind)
       const files = form.get('image')
       if (!(files instanceof File)) throw new AgendaError('Selecione uma imagem.')
       const target = kind === 'GALLERY' ? randomUUID() : ['PROFESSIONAL','SERVICE','PRODUCT'].includes(kind) ? id.parse(form.get('target')) : ''
       await storeMedia(tenantId, kind, target, files)
     } else if (operation === 'delete') {
-      await deleteMedia(tenantId, id.parse(form.get('id')))
+      const mediaId = id.parse(form.get('id'))
+      const asset = await db.mediaAsset.findFirst({ where: { id: mediaId, tenantId }, select: { kind: true } })
+      if (!asset) throw new AgendaError('Imagem indisponível.')
+      requireMediaPermission(asset.kind)
+      await deleteMedia(tenantId, mediaId)
     }
     return '/personalizacao'
   }, '/personalizacao')
 }
 
-export async function commerce(operation: 'product' | 'stock' | 'sale' | 'reverse' | 'entry' | 'settle' | 'refund-order' | 'review-order', form: FormData) {
+export async function commerce(operation: 'product' | 'stock' | 'count-stock' | 'sale' | 'reverse' | 'entry' | 'settle' | 'refund-order' | 'review-order', form: FormData) {
   await perform(async () => {
     const user = await userSession()
     if (!user) return '/login'
     const member = await membership(user.id)
     const scopes: Record<typeof operation, Permission> = {
-      product: 'product.manage', stock: 'stock.manage', sale: 'sale.create', reverse: 'sale.create',
+      product: 'product.manage', stock: 'stock.manage', 'count-stock': 'stock.manage', sale: 'sale.create', reverse: 'sale.create',
       entry: 'finance.write', settle: 'finance.write', 'refund-order': 'finance.refund', 'review-order': 'finance.read'
     }
     const scope = scopes[operation]
@@ -364,6 +375,16 @@ export async function commerce(operation: 'product' | 'stock' | 'sale' | 'revers
         data: { name: data.name, category: data.category, cents: data.cents, costCents: data.costCents, promotionCents: data.promotionCents || null, minimumStock: data.minimumStock }
       })
       if (!result.count) throw new AgendaError('Produto indisponível.')
+    } else if (operation === 'count-stock') {
+      const counted = z.object({
+        productId: id, requestId: z.uuid(), count: z.coerce.number().int().min(0).max(1_000_000),
+        expectedStock: z.coerce.number().int().min(0).max(1_000_000)
+      }).parse(body)
+      if (counted.count !== counted.expectedStock) await changeStock({
+        tenantId, productId: counted.productId, requestId: 'inventory:' + counted.requestId,
+        expectedStock: counted.expectedStock, quantity: counted.count - counted.expectedStock, sale: false
+      })
+      return '/comercial?inventario=salvo#estoque'
     } else if (operation === 'stock' || operation === 'sale') {
       const values = z.object({
         productId: id, requestId: z.uuid(), quantity: z.coerce.number().int().min(-1000000).max(1000000).refine(value => value !== 0)
@@ -380,10 +401,10 @@ export async function commerce(operation: 'product' | 'stock' | 'sale' | 'revers
     } else if (operation === 'refund-order') {
       await refundOrder(tenantId, id.parse(body.id))
     } else if (operation === 'entry') {
-      const values = z.object({ title, kind: z.enum(['INCOME', 'EXPENSE']), cents: cents.min(1), dueAt: z.iso.date() }).parse(body)
+      const values = z.object({ title, kind: z.enum(['INCOME', 'EXPENSE']), classification: z.enum(['GENERAL', 'TAX']).default('GENERAL'), cents: cents.min(1), dueAt: z.iso.date() }).parse(body)
       const date = DateTime.fromISO(values.dueAt, { zone: member.tenant.timezone })
       if (!date.isValid) throw new AgendaError('Informe um vencimento válido.')
-      await db.financialEntry.create({ data: { tenantId, ...values, dueAt: date.toJSDate(), paidAt: form.has('paid') ? new Date() : null } })
+      await db.financialEntry.create({ data: { tenantId, ...values, classification: values.kind === 'EXPENSE' ? values.classification : 'GENERAL', dueAt: date.toJSDate(), paidAt: form.has('paid') ? new Date() : null } })
     } else if (operation === 'settle') {
       await db.financialEntry.updateMany({ where: { id: id.parse(body.id), tenantId, paidAt: null }, data: { paidAt: new Date() } })
     }
@@ -459,7 +480,7 @@ export async function saveStripeSettings(form: FormData): Promise<StripeSettings
   }
 }
 
-export async function admin(operation: 'plan' | 'plan-edit' | 'plan-active' | 'suspend' | 'whatsapp' | 'stripe-test' | 'stripe-pause' | 'platform-fee', form: FormData) {
+export async function admin(operation: 'business-plan' | 'plan' | 'plan-edit' | 'plan-active' | 'suspend' | 'whatsapp' | 'stripe-test' | 'stripe-pause' | 'platform-fee', form: FormData) {
   await perform(async () => {
     const user = await userSession()
     if (!user?.platformAdmin) return '/login'
@@ -493,6 +514,10 @@ export async function admin(operation: 'plan' | 'plan-edit' | 'plan-active' | 's
         await tx.adminAudit.create({ data: { actorId: user.id, targetId: values.id, action: 'PLATFORM_FEE_UPDATED' } })
       })
       return '/super-admin'
+    }
+    if (operation === 'business-plan') {
+      await savePlan(user.id, businessSuitePlanId, businessSuitePlan, false, stripeForNewPayments)
+      return '/super-admin#planos'
     }
     if (operation === 'plan' || operation === 'plan-edit') {
       const data = z.object({ name: title, description: text.min(2), monthlyCents: cents.min(100), annualCents: cents.min(100), trialDays: z.coerce.number().int().min(0).max(90).default(0) }).parse(body)
@@ -546,7 +571,7 @@ export async function reserve(link: string, form: FormData) {
       } else if (!methods?.payments) throw new AgendaError('O pagamento está indisponível no momento.')
     }
     const consumer = await currentConsumer(tenant.id)
-    const appointment = await book(tenant, { ...data, consumerUserId: consumer?.userId, consent: form.has('consent'), online, checkoutMethod: online ? data.checkoutMethod : undefined, checkoutReturnUrl: base() + path })
+    const appointment = await book(tenant, { ...data, requireActive: true, consumerUserId: consumer?.userId, consent: form.has('consent'), online, checkoutMethod: online ? data.checkoutMethod : undefined, checkoutReturnUrl: base() + path })
     if (!online || !account) return path + '?reserva=' + appointment.id
     const session = await openAppointmentCheckout(appointment).catch(() => null)
     return session?.status === 'open' && session.url ? session.url : path + '?pagamento=' + appointment.paymentToken
@@ -592,15 +617,25 @@ export async function shopCheckout(link: string, form: FormData) {
     const cart = [...form.entries()].filter(([key]) => key.startsWith('product:')).map(([key, value]) => ({
       productId: id.parse(key.slice('product:'.length)), quantity: count.parse(value)
     })).filter(item => item.quantity)
-    if (!cart.length) throw new AgendaError('Selecione ao menos um produto.')
+    const coupon = z.string().trim().toUpperCase().regex(/^[A-Z0-9-]{0,24}$/).parse(form.get('coupon') ?? '')
+    const combo = z.string().max(100).parse(form.get('combo') ?? '')
+    if (coupon && combo) throw new AgendaError('Escolha um combo ou um cupom para este pedido.')
+    const offer = coupon ? { kind: 'COUPON' as const, value: coupon } : combo ? { kind: 'COMBO' as const, value: combo } : undefined
+    if (!cart.length && !combo) throw new AgendaError('Selecione ao menos um produto.')
     const consumer = await currentConsumer(tenant.id)
-    const order = await reserveOrder({ tenantId: tenant.id, cart, ...values, consumerUserId: consumer?.userId })
+    const order = await reserveOrder({ tenantId: tenant.id, cart, ...values, offer, requireActive: true, consumerUserId: consumer?.userId })
     if (order.status !== 'PENDING' || order.expiresAt <= new Date()) return path + '?pedido=' + order.id
     const session = await api.checkout.sessions.create({
       mode: 'payment', ...checkoutMethods(order.checkoutMethod), expires_at: +order.expiresAt / 1000,
-      line_items: order.items.map(item => ({
-        quantity: item.quantity, price_data: { currency: 'brl', unit_amount: item.unitCents, product_data: { name: item.name } }
-      })),
+      line_items: order.items.flatMap(item => {
+        const total = item.quantity * item.unitCents - item.discountCents
+        const unit = Math.floor(total / item.quantity)
+        const remainder = total % item.quantity
+        const line = (quantity: number, amount: number) => ({
+          quantity, price_data: { currency: 'brl', unit_amount: amount, product_data: { name: item.name } }
+        })
+        return remainder ? [line(item.quantity - remainder, unit), line(remainder, unit + 1)] : [line(item.quantity, unit)]
+      }),
       payment_intent_data: order.platformFeeCents ? { application_fee_amount: order.platformFeeCents } : undefined,
       metadata: { orderId: order.id }, success_url: base() + path + '?pedido=' + order.id, cancel_url: base() + path
     }, { stripeAccount: account, idempotencyKey: 'order:' + order.id })
@@ -670,7 +705,7 @@ export async function createTeamInvite(_previous: { link?: string; message?: str
   try {
     const user = await userSession()
     const member = user ? await membership(user.id) : null
-    if (!user || !member || member.role !== 'ADMIN' || !member.tenant.active || member.tenant.suspended) return { message: 'Acesso indisponível.' }
+    if (!user || !member || member.role !== 'ADMIN' || member.tenant.suspended) return { message: 'Acesso indisponível.' }
     if (!await allowAttempt('team-invite', member.tenantId, 20, 3600)) return { message: 'Aguarde antes de criar outro convite.' }
     const { inviteMember } = await import('@/lib/team')
     const values = z.object({ email: credentials.shape.email, role: z.enum(['MANAGER', 'RECEPTION', 'PROFESSIONAL', 'FINANCE', 'READONLY']), professionalId: z.string().max(100).optional() }).parse(Object.fromEntries(form))
@@ -698,7 +733,7 @@ export async function teamAccess(form: FormData) {
   await perform(async () => {
     const user = await userSession()
     const member = user ? await membership(user.id) : null
-    if (!user || !member || member.role !== 'ADMIN' || !member.tenant.active || member.tenant.suspended) return '/dashboard'
+    if (!user || !member || member.role !== 'ADMIN' || member.tenant.suspended) return '/dashboard'
     const { manageTeamAccess } = await import('@/lib/team')
     const values = z.object({ userId: id, state: z.enum(['disable', 'enable', 'revoke']) }).parse(Object.fromEntries(form))
     await manageTeamAccess(member.tenantId, user.id, values.userId, values.state)
@@ -713,11 +748,11 @@ export async function professionalCommission(form: FormData) {
     if (!member || member.role !== 'ADMIN' || !member.tenant.active || member.tenant.suspended) return '/dashboard'
     const values = z.object({
       id, operation: z.enum(['save', 'paid']),
-      percent: z.coerce.number().min(0).max(100).default(0), fixed: cents.default(0)
+      percent: z.coerce.number().min(0).max(100).default(0), fixed: cents.default(0), reference: z.string().trim().max(100).optional()
     }).parse(Object.fromEntries(form))
     if (values.operation === 'paid') {
       await db.professionalCommission.updateMany({
-        where: { appointmentId: values.id, paidAt: null, appointment: { tenantId: member.tenantId } }, data: { paidAt: new Date() }
+        where: { appointmentId: values.id, paidAt: null, appointment: { tenantId: member.tenantId } }, data: { paidAt: new Date(), paymentReference: values.reference || null }
       })
     } else {
       if (values.percent && values.fixed) throw new AgendaError('Escolha um percentual ou um valor fixo.')
@@ -809,7 +844,7 @@ export async function teamPermissions(form: FormData) {
   await perform(async () => {
     const user = await userSession()
     const member = user ? await membership(user.id) : null
-    if (!user || !member || member.role !== 'ADMIN' || !member.tenant.active || member.tenant.suspended) return '/dashboard'
+    if (!user || !member || member.role !== 'ADMIN' || member.tenant.suspended) return '/dashboard'
     const target = id.parse(form.get('userId'))
     const operation = z.enum(['custom', 'default']).parse(form.get('operation'))
     const values = z.array(z.enum(permissionKeys)).parse(form.getAll('permissions'))

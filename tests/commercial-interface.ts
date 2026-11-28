@@ -27,7 +27,7 @@ const sizes = [{ width: 390, height: 844 }, { width: 768, height: 1024 }, { widt
 async function main() {
   const datasource = new URL(process.env.DATABASE_URL ?? 'postgresql://invalid/invalid')
   assert.equal(origin.hostname, '127.0.0.1')
-  assert.ok(['127.0.0.1', 'localhost'].includes(datasource.hostname) && /^\/(?:cs_commercial_test(?:_[a-z0-9]+)?|cs_v3_browser)$/.test(datasource.pathname))
+  assert.ok(['127.0.0.1', 'localhost'].includes(datasource.hostname) && /^\/(?:cs_commercial_test(?:_[a-z0-9]+)?|cs_v3_browser|cs_v4_browser)$/.test(datasource.pathname))
   assert.equal(await db.stripeSettings.count(), 0)
   assert.equal(new URL(process.env.S3_ENDPOINT ?? 'https://invalid').hostname, '127.0.0.1')
   if (evidence) await mkdir(evidence, { recursive: true })

@@ -1,3 +1,4 @@
+import { businessSuitePlan, businessSuitePlanId } from '@/lib/plans'
 import Link from 'next/link'
 import { randomUUID } from 'node:crypto'
 import { Activity, CreditCard, Store, UsersRound } from 'lucide-react'
@@ -104,7 +105,12 @@ export default async function SuperAdmin({ searchParams }: { searchParams: Promi
             <Field label="Instância do WhatsApp" name="instance" value={t.whatsappInstance ?? ''} required={false} /><button className="outline">Salvar vínculo</button>
           </form></td></tr>)}</tbody>
       </table></div>}</article>
-      <article id="planos"><h2>Planos</h2><form className="inline" action={admin.bind(null, 'plan')}>
+      <article id="planos"><h2>Planos</h2>
+        {!plans.some(plan => plan.id === businessSuitePlanId) && <form action={admin.bind(null, 'business-plan')}>
+          <p>Business Suite · {brl(businessSuitePlan.monthlyCents)} ao mês ou {brl(businessSuitePlan.annualCents)} ao ano.</p>
+          <button className="outline">Cadastrar oferta Business Suite na Stripe</button>
+        </form>}
+        <form className="inline" action={admin.bind(null, 'plan')}>
         <input name="requestId" type="hidden" value={randomUUID()} />
         <Field label="Nome" name="name" /><Field label="Descrição" name="description" /><Field label="Mensal em centavos" name="monthlyCents" type="number" min={100} />
         <Field label="Anual em centavos" name="annualCents" type="number" min={100} /><Field label="Dias de avaliação" name="trialDays" type="number" min={0} max={90} value={0} /><button>Criar plano</button></form>

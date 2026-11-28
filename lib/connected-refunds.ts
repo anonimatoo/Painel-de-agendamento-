@@ -67,9 +67,10 @@ export async function applyConnectedRefund(tx: Prisma.TransactionClient, account
     }
   } else if (order) {
     const fresh = await tx.shopOrder.findUniqueOrThrow({ where: { id: order.id }, select: { status: true } })
+    const refundedAt = new Date()
     const changed = await tx.shopOrder.updateMany({
       where: { id: order.id, status: { in: ['PAID', 'CANCELED'] }, refundedAt: null },
-      data: { status: 'REFUNDED', refundedAt: new Date(), paymentReview: false }
+      data: { status: 'REFUNDED', refundedAt, paymentReview: false, recognizedSale: fresh.status === 'PAID', stockReturnedAt: fresh.status === 'PAID' ? refundedAt : undefined }
     })
     if (!changed.count || fresh.status !== 'PAID') return
     const items = await tx.shopOrderItem.findMany({ where: { tenantId: order.tenantId, orderId: order.id }, orderBy: { productId: 'asc' } })

@@ -159,7 +159,7 @@ globalThis.fetch = (input, options) => {
     })
     await page.goto(new URL('/cadastro', base).href)
     assert.equal(await page.getByLabel(/Endereço da página/).count(), 0)
-    assert.equal(await page.getByRole('button', { name: 'Continuar com Apple' }).count(), 1)
+    assert.equal(await page.getByRole('button', { name: 'Continuar com Apple' }).count(), 0)
     await page.getByLabel('Nome do estabelecimento').fill('Nome preservado')
     await page.getByLabel('E-mail', { exact: true }).fill('inválido')
     await page.getByLabel('Senha', { exact: true }).fill('curta')

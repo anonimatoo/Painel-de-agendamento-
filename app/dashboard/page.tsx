@@ -12,6 +12,8 @@ import { ErrorNote, Field, brl } from '../ui'
 
 import { MerchantShell } from '../merchant-shell'
 import { Overview } from './overview'
+import { saveDraftCycle } from '../catalogo/produto/actions'
+import { businessSuiteOffer } from '@/lib/business-plan'
 
 const labels = { CONFIRMED: 'Confirmado', PENDING: 'Aguardando pagamento', CANCELED: 'Cancelado', NO_SHOW: 'Faltou', COMPLETED: 'Concluído' }
 const weekdays = ['Segunda-feira', 'Terça-feira', 'Quarta-feira', 'Quinta-feira', 'Sexta-feira', 'Sábado', 'Domingo']
@@ -36,11 +38,12 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
     profissionais: can(member, 'team.professionals'),
     configuracoes: can(member, 'settings.manage')
   }
-  if (section && (!enabled || !scopes[section])) redirect('/dashboard')
-  const show = (name: keyof typeof titles) => enabled && (!section || section === name) && scopes[name]
+  const canPrepareTeam = !tenant.suspended && section === 'profissionais'
+  if (section && (!(enabled || canPrepareTeam) || !scopes[section])) redirect('/dashboard')
+  const show = (name: keyof typeof titles) => (enabled || (canPrepareTeam && name === 'profissionais')) && (!section || section === name) && scopes[name]
   const [plans, services, professionals, customers, products, appointments, connect] = await Promise.all([
     role === 'ADMIN' && !enabled ? db.plan.findMany({ where: { active: true } }) : [],
-    enabled && (!section || section === 'profissionais') && (can(member, 'service.read') || can(member, 'service.manage') || scopes.profissionais) ? db.service.findMany({ where: { tenantId }, orderBy: { name: 'asc' } }) : [],
+    (enabled || canPrepareTeam) && (!section || section === 'profissionais') && (can(member, 'service.read') || can(member, 'service.manage') || scopes.profissionais) ? db.service.findMany({ where: { tenantId }, orderBy: { name: 'asc' } }) : [],
     show('profissionais') ? db.professional.findMany({ where: { tenantId }, orderBy: { name: 'asc' }, include: { hours: true, assignments: { include: { service: true } } } }) : [],
     show('clientes') && can(member, 'customer.read') ? db.customer.findMany({ where: { tenantId }, orderBy: { name: 'asc' }, take: 100 }) : [],
     enabled && !section && can(member, 'product.manage') ? db.product.findMany({ where: { tenantId }, orderBy: { name: 'asc' } }) : [],
@@ -58,6 +61,12 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
       {query.assinatura && <p role="status">Aguardando a confirmação da assinatura.</p>}
       {!enabled && <article><h2>{tenant.suspended ? 'Acesso suspenso' : 'Assinatura necessária'}</h2>
         {tenant.suspended ? <p>Entre em contato com o suporte para retomar o acesso.</p> : <p>Selecione um plano para publicar sua página e abrir a agenda.</p>}
+        {role === 'ADMIN' && !tenant.suspended && <form className="inline" action={saveDraftCycle}>
+          <label>Plano para preparação privada<select name="cycle" defaultValue={tenant.draftBillingCycle}>
+            <option value="monthly">Mensal · {brl(businessSuiteOffer.monthly.cents)} · 10 fotos por produto</option>
+            <option value="annual">Anual · {brl(businessSuiteOffer.annual.cents)} · 30 fotos por produto</option>
+          </select></label><button className="outline">Salvar preferência</button>
+        </form>}
         {role === 'ADMIN' && !tenant.suspended && plans.map(plan => <form className="inline" key={plan.id} action={manage.bind(null, 'subscription')}>
           <input type="hidden" name="planId" value={plan.id} /><label>{plan.name}<select name="cycle"><option value="monthly">{brl(plan.monthlyCents)} por mês</option><option value="annual">{brl(plan.annualCents)} por ano</option></select></label><button>Assinar</button>
         </form>)}

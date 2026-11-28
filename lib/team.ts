@@ -28,7 +28,7 @@ export async function acceptInvite(token: string, password: string) {
     const invite = await tx.teamInvite.findUnique({
       where: { tokenHash }, include: { tenant: { select: { active: true, suspended: true } } }
     })
-    if (!invite || invite.expiresAt <= new Date() || !invite.tenant.active || invite.tenant.suspended) {
+    if (!invite || invite.expiresAt <= new Date() || invite.tenant.suspended) {
       throw new AgendaError('Este convite expirou ou está indisponível.')
     }
     const removed = await tx.teamInvite.deleteMany({ where: { tokenHash, expiresAt: { gt: new Date() } } })

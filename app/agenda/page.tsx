@@ -1,3 +1,4 @@
+import { editHoliday } from './holiday-actions'
 import { type Status } from '@prisma/client'
 import Link from 'next/link'
 import { redirect } from 'next/navigation'
@@ -24,7 +25,7 @@ const operations: Record<string, string> = {
 }
 
 type CalendarQuery = {
-  erro?: string; alterado?: string; dia?: string; visual?: string; profissional?: string; servico?: string; situacao?: string; horario?: string
+  erro?: string; feriado?: string; alterado?: string; dia?: string; visual?: string; profissional?: string; servico?: string; situacao?: string; horario?: string
 }
 
 export default async function AgendaPage({ searchParams }: { searchParams: Promise<CalendarQuery> }) {
@@ -88,6 +89,8 @@ export default async function AgendaPage({ searchParams }: { searchParams: Promi
   const free = view !== 'mes' && serviceId && professionalId
     ? await Promise.all(days.map(date => availability(tenant, serviceId, professionalId, date.toISODate()!)))
     : []
+  const holidayAllowed = manager && can(member, 'team.professionals')
+  const holidays = holidayAllowed ? await db.storeHoliday.findMany({ where: { tenantId }, orderBy: { date: 'desc' }, take: 60 }) : []
   const date = (value: Date) => DateTime.fromJSDate(value, { zone })
   const formatted = (value: Date) => date(value).toFormat('dd/LL/yyyy HH:mm')
   const overlapping = (from: Date, to: Date, date: DateTime) => +from < +date.plus({ days: 1 }) && +to > +date
@@ -135,7 +138,7 @@ export default async function AgendaPage({ searchParams }: { searchParams: Promi
       <div className={styles.heading}><div><h1><CalendarDays aria-hidden /> Agenda</h1><p>Acompanhe horários, atendimentos e reservas do estabelecimento.</p></div>
         {create && <a className="button" href="#novo-agendamento"><CalendarPlus aria-hidden size={18} /> Novo agendamento</a>}
       </div>
-      <ErrorNote error={query.erro} />
+      <ErrorNote error={query.erro} />{query.feriado === 'salvo' && <p role="status" className="success">Calendário atualizado.</p>}
       {query.alterado && <p className="success" role="status">{query.alterado === 'consulta' ? 'Consulta concluída. Veja a situação atual da reserva.' : query.alterado === 'estorno' ? 'Solicitação executada. Consulte o andamento em Recebimentos.' : 'Agenda atualizada.'}</p>}
       <article className={styles.calendar}>
         <div className={styles.toolbar}>
@@ -209,6 +212,17 @@ export default async function AgendaPage({ searchParams }: { searchParams: Promi
             <label>Profissional<select name="professionalId" defaultValue={professionalId ?? ''} required><option value="">Selecione</option>{activeProfessionals.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
             <Field label="Data e horário" name="startsAt" type="datetime-local" value={bookingSelection} /><button>Criar agendamento</button>
           </form> : <p>Cadastre o <Link href="/dashboard?secao=clientes">cliente</Link>, o <Link href="/catalogo">serviço</Link>, o <Link href="/dashboard?secao=profissionais">profissional e os horários</Link> para criar um atendimento.</p>}
+        </article>}
+        {holidayAllowed && <article><h2>Feriados e fechamentos</h2>
+          <form className={styles.formGrid} action={editHoliday}>
+            <label>Data do fechamento<input type="date" name="date" required /></label>
+            <label>Motivo<input name="name" required maxLength={100} /></label>
+            <button name="command" value="save">Bloquear o dia inteiro</button>
+          </form>
+          {holidays.length > 0 && <ul>{holidays.map(day => <li key={day.date}>{day.date.split('-').reverse().join('/')} · {day.name}
+            <form action={editHoliday}><input type="hidden" name="date" value={day.date} />
+              <button name="command" value="remove" className="outline">Reabrir {day.date.split('-').reverse().join('/')}</button></form>
+          </li>)}</ul>}
         </article>}
         {manager && activeProfessionals.length > 0 && <article><h2><LockKeyhole aria-hidden /> Bloquear horários</h2><form className={styles.formGrid} action={manage.bind(null, 'block')}><input type="hidden" name="destination" value="agenda" />
           <label>Profissional<select name="professionalId"><option value="all">Todos os profissionais ativos</option>{activeProfessionals.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>

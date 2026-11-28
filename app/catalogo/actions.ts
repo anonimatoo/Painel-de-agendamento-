@@ -29,12 +29,13 @@ export async function changeCatalog(section: Section, form: FormData) {
   const user = await userSession()
   if (!user) redirect('/login')
   const member = await membership(user.id)
-  if (!member || !member.tenant.active || member.tenant.suspended || !can(member, scopes[section]) ||
+  if (!member || member.tenant.suspended || !can(member, scopes[section]) ||
       (section === 'categoria' && !can(member, 'service.manage'))) redirect('/dashboard')
   const { tenantId } = member
   let target = fallback
   try {
     const command = allowedCommands.parse(form.get('command'))
+    if (command === 'ativar' && !member.tenant.active) throw new AgendaError('Ative a assinatura para publicar o catálogo.')
     const itemId = form.get('id') ? id.parse(form.get('id')) : undefined
     const itemTarget = itemId ? addQuery(fallback, 'editar', itemId) : addQuery(fallback, 'novo', section)
     if (section !== 'categoria') target = itemTarget
@@ -45,7 +46,7 @@ export async function changeCatalog(section: Section, form: FormData) {
     } else if (command === 'salvar') {
       const common = { name: name.parse(form.get('name')), description: description.parse(form.get('description')), category: category.parse(form.get('category')) }
       const cents = parseReais(z.string().parse(form.get('price')))
-      const active = form.has('published')
+      const active = member.tenant.active && form.has('published')
       if (section === 'produto') {
         const promotion = z.string().parse(form.get('promotion')).trim()
         const cost = z.string().parse(form.get('cost')).trim()
@@ -114,6 +115,7 @@ export async function changeCatalog(section: Section, form: FormData) {
         if (!changed.count) throw new AgendaError('O estado do serviço mudou. Confira o catálogo.')
       }
     }
+    if (section === 'produto' && command === 'duplicar') target = '/catalogo/produto/' + new URL(target, 'http://local').searchParams.get('editar')
     target = addQuery(target, 'salvo', '1')
   } catch (error) {
     unstable_rethrow(error)

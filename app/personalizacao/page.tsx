@@ -22,6 +22,9 @@ export default async function Branding({ searchParams }: { searchParams: Promise
     db.mediaAsset.findMany({ where }), db.professional.findMany({ where }), db.service.findMany({ where }), db.product.findMany({ where }), searchParams
   ])
   const targets = { PROFESSIONAL: professionals, SERVICE: services, PRODUCT: products }
+  const canEditImage = (kind: string) => kind === 'PRODUCT' ? can(member, 'product.manage')
+    : kind === 'SERVICE' ? can(member, 'service.manage')
+      : kind === 'PROFESSIONAL' ? can(member, 'team.professionals') : true
   const kinds = Object.keys(names) as Array<keyof typeof names>
   const cover = media.find(item => item.kind === 'COVER')?.key ?? tenant.coverKey
   const logo = media.find(item => item.kind === 'LOGO')?.key
@@ -47,7 +50,7 @@ export default async function Branding({ searchParams }: { searchParams: Promise
       <form action={brandSettings.bind(null, 'address')} className="inline"><Field label="Endereço (letras minúsculas, números e hífens)" name="slug" value={tenant.slug} /><button>Salvar endereço</button></form>
     </article>}
     <article><h2>Imagens</h2>
-      {kinds.map(kind => {
+      {kinds.filter(canEditImage).map(kind => {
         const options = kind in targets ? targets[kind as keyof typeof targets] : undefined
         if (options && !options.length) return null
         return <details key={kind}><summary>{names[kind]}</summary><form className="inline" action={brandSettings.bind(null, 'upload')}>
@@ -56,7 +59,7 @@ export default async function Branding({ searchParams }: { searchParams: Promise
           <label>Imagem<input type="file" name="image" accept="image/jpeg,image/png,image/webp" required /></label><button>Salvar imagem</button>
         </form></details>
       })}
-      <div className="grid">{media.map(item => <div key={item.id}>
+      <div className="grid">{media.filter(item => canEditImage(item.kind)).map(item => <div key={item.id}>
         <img className="cover" src={'/api/imagens/' + item.key} alt={names[item.kind]} />
         <form action={brandSettings.bind(null, 'delete')}><input type="hidden" name="id" value={item.id} /><button className="outline">Excluir {names[item.kind].toLowerCase()}</button></form>
       </div>)}</div>
@@ -70,8 +73,8 @@ export default async function Branding({ searchParams }: { searchParams: Promise
           <label>Primeira seção<select name="layout" defaultValue={design.layout}><option value="booking">Agendamento</option><option value="products">Produtos</option></select></label>
         </div>
         <div className="grid">
-          <fieldset><legend>Produtos em destaque (até seis)</legend>{products.filter(item => item.published && !item.archivedAt).map(item => <label className="check" key={item.id}><input type="checkbox" name="productIds" value={item.id} defaultChecked={design.productIds.includes(item.id)} />{item.name}</label>)}</fieldset>
-          <fieldset><legend>Serviços em destaque (até seis)</legend>{services.filter(item => item.active && !item.archivedAt).map(item => <label className="check" key={item.id}><input type="checkbox" name="serviceIds" value={item.id} defaultChecked={design.serviceIds.includes(item.id)} />{item.name}</label>)}</fieldset>
+          <fieldset><legend>Produtos em destaque (até seis)</legend>{products.filter(item => (!tenant.active || item.published) && !item.archivedAt).map(item => <label className="check" key={item.id}><input type="checkbox" name="productIds" value={item.id} defaultChecked={design.productIds.includes(item.id)} />{item.name}</label>)}</fieldset>
+          <fieldset><legend>Serviços em destaque (até seis)</legend>{services.filter(item => (!tenant.active || item.active) && !item.archivedAt).map(item => <label className="check" key={item.id}><input type="checkbox" name="serviceIds" value={item.id} defaultChecked={design.serviceIds.includes(item.id)} />{item.name}</label>)}</fieldset>
         </div>
         <div className="inline"><button name="command" value="save">Salvar rascunho</button><Link className="button outline" href={publicPath + '?previa=1'}>Visualizar página</Link></div>
       </form>

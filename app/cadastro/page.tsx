@@ -16,6 +16,7 @@ export default async function Register({ searchParams }: { searchParams: Promise
     {providers.length > 0 && <div className={styles.authSocial}>
       <p className={styles.divider}>ou cadastre-se com</p><SocialButtons providers={providers} />
     </div>}
+    {providers.length < 2 && <p>Se Google ou Apple não aparecer, continue com seu e-mail.</p>}
     <div className={styles.authBottom}>
       <p>Já tem conta? <Link href="/login">Entrar</Link></p>
       <Link href="/ajuda#clientes">Quero agendar como cliente</Link>

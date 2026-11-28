@@ -17,31 +17,36 @@ type Entry = { href: string; label: string; icon: LucideIcon; scopes?: Permissio
 
 function merchantMenu(member: MerchantMember) {
   const enabled = member.tenant.active && !member.tenant.suspended
+  const preparing = !member.tenant.suspended
   const groups: { label: string; entries: Entry[] }[] = [
     { label: 'Operação', entries: [
       { href: '/dashboard', label: 'Visão geral', icon: House, availableWithoutPlan: true },
       { href: member.role === 'PROFESSIONAL' ? '/dashboard#minha-agenda' : '/agenda', label: 'Agenda', icon: CalendarDays, scopes: ['agenda.read'] },
       { href: '/dashboard?secao=clientes', label: 'Clientes', icon: UsersRound, scopes: ['customer.read', 'customer.create'] },
-      { href: '/dashboard?secao=profissionais', label: 'Profissionais', icon: UserRoundCog, scopes: ['team.professionals'] },
-      { href: '/equipe', label: 'Equipe', icon: UsersRound, admin: true }
+      { href: '/dashboard?secao=profissionais', availableWithoutPlan: preparing, label: 'Profissionais', icon: UserRoundCog, scopes: ['team.professionals'] },
+      { href: '/equipe', availableWithoutPlan: preparing, label: 'Equipe', icon: UsersRound, admin: true }
     ] },
     { label: 'Catálogo', entries: [
-      { href: '/catalogo', label: 'Produtos', icon: Package, scopes: ['product.manage'] },
-      { href: '/catalogo?secao=servicos', label: 'Serviços', icon: Scissors, scopes: ['service.read', 'service.manage'] },
-      { href: '/catalogo?secao=categorias', label: 'Categorias', icon: Tag, scopes: ['product.manage'] },
+      { href: '/catalogo', availableWithoutPlan: preparing, label: 'Produtos', icon: Package, scopes: ['product.manage'] },
+      { href: '/catalogo?secao=servicos', availableWithoutPlan: preparing, label: 'Serviços', icon: Scissors, scopes: ['service.read', 'service.manage'] },
+      { href: '/catalogo?secao=categorias', availableWithoutPlan: preparing, label: 'Categorias', icon: Tag, scopes: ['product.manage'] },
       { href: '/comercial#pedidos', label: 'Pedidos', icon: ShoppingBag, scopes: ['finance.read'] },
       { href: '/comercial#vendas', label: 'Vendas', icon: ShoppingBag, scopes: ['sale.create'] },
+      { href: '/compras', label: 'Compras e fornecedores', icon: Package, scopes: ['stock.manage'], show: can(member, 'finance.write') },
       { href: '/comercial#estoque', label: 'Estoque', icon: Boxes, scopes: ['stock.manage', 'product.manage'] }
     ] },
     { label: 'Financeiro', entries: [
       { href: '/comercial', label: 'Fluxo de caixa', icon: Wallet, scopes: ['finance.read'] },
       { href: '/recebimentos', label: 'Recebimentos e estornos', icon: RotateCcw, scopes: ['finance.read'] },
       { href: '/comissoes', label: 'Comissões', icon: Receipt, admin: true },
+      { href: '/resultado', label: 'DRE e resultado', icon: BarChart3, scopes: ['finance.read'] },
       { href: '/relatorios', label: 'Relatórios', icon: BarChart3, scopes: ['finance.read'] }
     ] },
     { label: 'Relacionamento', entries: [
+      { href: '/fidelidade', label: 'Fidelidade', icon: UsersRound, scopes: ['customer.edit'] },
       { href: '/whatsapp', label: 'WhatsApp', icon: MessageCircle, scopes: ['whatsapp.manage'] },
-      { href: '/whatsapp#preferencias', label: 'Marketing', icon: Bell, scopes: ['whatsapp.manage'] },
+      { href: '/marketing/campanhas', label: 'Campanhas', icon: MessageCircle, scopes: ['whatsapp.manage'] },
+      { href: '/marketing', label: 'Marketing e ofertas', icon: Bell, scopes: ['product.manage'] },
       { href: '/automacoes', label: 'Automações', icon: Zap, scopes: ['agenda.edit', 'whatsapp.manage'] }
     ] },
     { label: 'Estabelecimento', entries: [

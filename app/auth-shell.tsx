@@ -2,6 +2,7 @@ import type { ReactNode } from 'react'
 import Link from 'next/link'
 import { ArrowLeft, CalendarCheck2, CreditCard, MessageCircle, ShieldCheck } from 'lucide-react'
 import { PublicBrand } from './public-brand'
+import { supportEmail } from '@/lib/support'
 import styles from './public-experience.module.css'
 
 export function AuthShell({ children, mode }: { children: ReactNode; mode: 'register' | 'login' | 'admin' }) {
@@ -28,7 +29,7 @@ export function AuthShell({ children, mode }: { children: ReactNode; mode: 'regi
       <article className={styles.authCard}>{children}</article>
     </main>
     <footer className={styles.authFooter}>
-      <Link href="/ajuda">Ajuda e suporte</Link>
+      <a href={'mailto:' + supportEmail()}>Enviar e-mail ao suporte</a>
       <Link href="/termos">Termos de uso</Link>
       <Link href="/privacidade">Privacidade</Link>
     </footer>

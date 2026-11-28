@@ -14,7 +14,7 @@ export default async function Team({ searchParams }: { searchParams: Promise<{ e
   const user = await userSession()
   if (!user) redirect('/login')
   const member = await membership(user.id)
-  if (!member || member.role !== 'ADMIN' || !member.tenant.active || member.tenant.suspended) redirect('/dashboard')
+  if (!member || member.role !== 'ADMIN' || member.tenant.suspended) redirect('/dashboard')
   const where = { tenantId: member.tenantId }
   const [members, professionals, changes] = await Promise.all([
     db.member.findMany({ where, include: { user: { select: { email: true } } } }),

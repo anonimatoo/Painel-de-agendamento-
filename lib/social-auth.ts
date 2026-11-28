@@ -2,7 +2,7 @@ import { Prisma } from '@prisma/client'
 import { cookies } from 'next/headers'
 import { db } from './db'
 import { seal, unseal } from './secrets'
-import { authorizationUrl, exchangeSocialCode, randomToken, socialProviders, tokenDigest, type ProviderCredentials, type SocialClaims, type SocialProvider } from './social-oidc'
+import { authorizationUrl, callbackUrl, exchangeSocialCode, randomToken, socialProviders, tokenDigest, type ProviderCredentials, type SocialClaims, type SocialProvider } from './social-oidc'
 import { signupEmail } from './registration'
 
 const life = 10 * 60_000
@@ -11,9 +11,28 @@ type LinkSession = { userId: string; tokenHash: string }
 type Attempt = { nonce: string; verifier: string; revision: string; link?: LinkSession; consumerSlug?: string }
 export type SocialSignup = { provider: SocialProvider; subject: string; email: string; emailVerified: boolean; revision: string; expires: number; consumerSlug?: string }
 
+export async function socialProviderReadiness() {
+  const rows = await db.socialProviderSettings.findMany({ select: { provider: true, enabled: true, encrypted: true } })
+  return socialProviders.map(provider => {
+    const row = rows.find(item => item.provider === provider)
+    try {
+      const callback = callbackUrl(provider)
+      if (provider === 'apple' && !callback.startsWith('https://')) return { provider, ready: false, status: 'Configure uma URL pública HTTPS para o retorno da Apple.' }
+      if (!row) return { provider, ready: false, status: 'Credenciais não cadastradas.' }
+      if (!row.enabled) return { provider, ready: false, status: 'Cadastrado e desativado.' }
+      const config = JSON.parse(unseal(row.encrypted, 'social:' + provider)) as ProviderCredentials
+      if (!config.clientId || !config.secret || (provider === 'apple' && !(config.teamId && config.keyId))) {
+        return { provider, ready: false, status: 'Credenciais incompletas.' }
+      }
+      return { provider, ready: true, status: 'Habilitado. Valide o retorno em uma conta de teste do provedor.' }
+    } catch {
+      return { provider, ready: false, status: 'Não foi possível verificar a URL ou ler as credenciais protegidas.' }
+    }
+  })
+}
+
 export async function enabledSocialProviders() {
-  const rows = await db.socialProviderSettings.findMany({ where: { enabled: true }, select: { provider: true } })
-  return socialProviders.filter(provider => rows.some(row => row.provider === provider))
+  return (await socialProviderReadiness()).filter(row => row.ready).map(row => row.provider)
 }
 
 export async function beginSocial(provider: SocialProvider, link?: LinkSession, consumerSlug?: string) {

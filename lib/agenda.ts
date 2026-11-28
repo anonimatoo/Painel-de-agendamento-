@@ -1,3 +1,4 @@
+import { queueAutomation } from './automation'
 import { randomUUID } from 'node:crypto'
 import { DateTime } from 'luxon'
 import { Prisma, Tenant, type CheckoutMethod } from '@prisma/client'
@@ -17,7 +18,8 @@ export class AgendaError extends Error {}
 export async function availability(tenant: Tenant, serviceId: string, professionalId: string, day: string, client: Prisma.TransactionClient = db, excludeAppointment?: string) {
   const { start, end } = dayBounds(day, tenant.timezone)
   const now = DateTime.now()
-  if (end <= now || start > now.plus({ days: 90 })) return []
+  if (end <= now || start > now.plus({ days: 90 }) ||
+      await client.storeHoliday.count({ where: { tenantId: tenant.id, date: day } })) return []
   const assignment = await client.assignment.findFirst({
     where: { tenantId: tenant.id, professionalId, serviceId, service: { active: true, archivedAt: null }, professional: { active: true } },
     select: { serviceId: true }
@@ -54,15 +56,20 @@ export async function availability(tenant: Tenant, serviceId: string, profession
   return [...slots.values()].sort((a, b) => a.start.localeCompare(b.start))
 }
 
-export async function book(tenant: Tenant, data: { serviceId: string; professionalId: string; startsAt: string; name: string; phone: string; consent: boolean; online: boolean; checkoutMethod?: CheckoutMethod; consumerUserId?: string; checkoutReturnUrl?: string }) {
+export async function book(tenant: Tenant, data: { serviceId: string; professionalId: string; startsAt: string; name: string; phone: string; consent: boolean; online: boolean; checkoutMethod?: CheckoutMethod; consumerUserId?: string; checkoutReturnUrl?: string; requireActive?: boolean }) {
   const day = DateTime.fromISO(data.startsAt, { zone: tenant.timezone }).toISODate()
   if (data.checkoutMethod === 'pix' && +new Date(data.startsAt) < Date.now() + pixCheckoutLeadMinutes * 60_000) throw new AgendaError('Escolha um horário com pelo menos 40 minutos de antecedência para pagar com Pix.')
   if (!day) throw new AgendaError('Selecione um horário válido.')
   return db.$transaction(async tx => {
-    if (data.online) {
-      const [current] = await tx.$queryRaw<{ stripeAccountId: string | null; connectPausedAt: Date | null; pixCheckoutEnabled: boolean }[]>`
-        SELECT "stripeAccountId", "connectPausedAt", "pixCheckoutEnabled" FROM "Tenant" WHERE id = ${tenant.id} FOR UPDATE`
-      if (!current || current.connectPausedAt || current.stripeAccountId !== tenant.stripeAccountId || (data.checkoutMethod === 'pix' && !current.pixCheckoutEnabled)) throw new AgendaError('Os pagamentos online estão indisponíveis.')
+    if (data.online || data.requireActive) {
+      const [current] = await tx.$queryRaw<{ stripeAccountId: string | null; connectPausedAt: Date | null; pixCheckoutEnabled: boolean; active: boolean; suspended: boolean }[]>`
+        SELECT "stripeAccountId", "connectPausedAt", "pixCheckoutEnabled", active, suspended
+        FROM "Tenant" WHERE id = ${tenant.id} ${data.online ? Prisma.sql`FOR UPDATE` : Prisma.sql`FOR SHARE`}`
+      if (!current || (data.requireActive && (!current.active || current.suspended))) throw new AgendaError('A agenda está indisponível.')
+      if (data.online && (current.connectPausedAt || current.stripeAccountId !== tenant.stripeAccountId ||
+          (data.checkoutMethod === 'pix' && !current.pixCheckoutEnabled))) throw new AgendaError('Os pagamentos online estão indisponíveis.')
+    } else {
+      await tx.$queryRaw`SELECT id FROM "Tenant" WHERE id = ${tenant.id} FOR SHARE`
     }
     await lockProfessional(tx, tenant.id, data.professionalId)
     const slots = await availability(tenant, data.serviceId, data.professionalId, day, tx)
@@ -91,7 +98,10 @@ export async function book(tenant: Tenant, data: { serviceId: string; profession
     await tx.appointmentHistory.create({ data: { appointmentId: appointment.id, operation: 'CREATED', newStart: appointment.startsAt } })
     await scheduleReminder(tx, tenant, appointment)
     await enqueueStatus(tx, tenant, appointment, data.online ? 'PAYMENT_PENDING' : 'CONFIRMED')
-    if (!data.online) await enqueueMerchantConfirmation(tx, tenant, appointment)
+    if (!data.online) {
+      await enqueueMerchantConfirmation(tx, tenant, appointment)
+      await queueAutomation(tx, appointment, 'CONFIRMED')
+    }
     return appointment
   })
 }
@@ -190,6 +200,7 @@ export async function blockSchedule(tenantId: string, professionalId: string, st
 
 export async function rescheduleAppointment(tenant: Tenant, id: string, startsAt: Date, actorId: string, consumer?: { userId: string; after: Date }) {
   return db.$transaction(async tx => {
+    await tx.$queryRaw`SELECT id FROM "Tenant" WHERE id = ${tenant.id} FOR SHARE`
     const result = await tx.appointment.findFirst({
       where: { id, tenantId: tenant.id, consumerUserId: consumer?.userId, status: 'CONFIRMED', startsAt: { gt: consumer?.after ?? new Date() } }
     })
@@ -214,6 +225,7 @@ export async function rescheduleAppointment(tenant: Tenant, id: string, startsAt
     const appointment = { ...result, startsAt, endsAt }
     await scheduleReminder(tx, tenant, appointment)
     await enqueueStatus(tx, tenant, appointment, 'RESCHEDULED')
+    await queueAutomation(tx, appointment, 'RESCHEDULED')
     return appointment
   })
 }

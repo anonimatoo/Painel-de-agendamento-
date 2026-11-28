@@ -1,3 +1,6 @@
+import { retryMediaCleanup } from '../lib/storage'
+import { sendCampaignDelivery } from '../lib/campaigns'
+import { processAutomationRuns } from '../lib/automation'
 import { Queue, Worker } from 'bullmq'
 import { DateTime } from 'luxon'
 import { scheduleBirthdays } from '../lib/whatsapp-followup'
@@ -34,7 +37,12 @@ const worker = new Worker('agenda-reminders', async job => {
   const followup = reminder.kind === 'BIRTHDAY' || reminder.kind === 'RETURN'
   if (!tenant.active || tenant.suspended || !tenant.whatsappInstance) return
   const merchant = reminder.kind === 'MERCHANT_CONFIRMED'
-  const manual = reminder.kind === 'MANUAL_REMINDER'
+  const automated = reminder.kind === 'CS_AUTOMATION'
+  const manual = automated || reminder.kind === 'MANUAL_REMINDER'
+  const currentAutomation = !automated || (await db.automationRun.findMany({
+    where: { tenantId: tenant.id, reminderId: reminder.id, rule: { enabled: true } },
+    select: { revision: true, rule: { select: { revision: true } } }
+  })).some(run => run.revision === run.rule.revision)
   const agreed = merchant ? Boolean(reminder.recipientPhone && reminder.recipientPhone === tenant.merchantNoticePhone)
     : followup ? !!appointment.customer.followupConsentAt : appointment.consent
   const reminderEligible = reminder.kind === 'REMINDER' && appointment.status === 'CONFIRMED' && appointment.startsAt > now &&
@@ -58,7 +66,7 @@ const worker = new Worker('agenda-reminders', async job => {
       where: { tenantId: tenant.id, customerId: appointment.customerId, status: { in: ['COMPLETED','CONFIRMED','PENDING'] }, startsAt: { gt: appointment.startsAt } }
     })
   }
-  if (!agreed || (!reminderEligible && !statusEligible && !followupEligible && !special)) {
+  if (!currentAutomation || !agreed || (!reminderEligible && !statusEligible && !followupEligible && !special)) {
     await db.reminder.updateMany({ where: { id: reminder.id, deliveryState: 'QUEUED' }, data: { deliveryState: 'CANCELED' } })
     return
   }
@@ -79,11 +87,25 @@ const worker = new Worker('agenda-reminders', async job => {
   await deliverMessage(reminder.id, () => sendWhatsApp(tenant.whatsappInstance!, merchant ? reminder.recipientPhone! : appointment.customer.phone, message), now)
 }, { connection })
 
+const campaignQueue = new Queue('business-campaigns', { connection })
+const campaignWorker = new Worker('business-campaigns', job => sendCampaignDelivery(job.data.id), {
+  connection, limiter: { max: 8, duration: 60_000 }
+})
+campaignWorker.on('error', () => console.error('Falha na conexão do worker de campanhas.'))
+
+async function publishCampaigns() {
+  const stale = new Date(Date.now() - 120_000)
+  await db.campaignDelivery.updateMany({ where: { state: 'SENDING', claimedAt: { lt: stale } }, data: { state: 'REVIEW', claimedAt: null } })
+  const rows = await db.campaignDelivery.findMany({ where: { state: 'QUEUED' }, orderBy: { createdAt: 'asc' }, take: 100, select: { id: true } })
+  await campaignQueue.addBulk(rows.map(({ id }) => ({ name: 'send', data: { id }, opts: { jobId: id, removeOnComplete: true, removeOnFail: true } })))
+}
+
 async function publishReminders() {
   await queue.getWaitingCount()
   await db.workerHeartbeat.upsert({ where: { id: 1 }, create: { id: 1, seenAt: new Date() }, update: { seenAt: new Date() } })
   const now = new Date()
   await recoverDelivery(now)
+  await processAutomationRuns(now).catch(() => console.error('Falha ao preparar lembretes do CS Automation Pro.'))
   const due = await db.reminder.findMany({
     take: 100, orderBy: { runAt: 'asc' },
     where: {
@@ -91,8 +113,8 @@ async function publishReminders() {
       sentAt: null, runAt: { gte: new Date(+now - 86_400_000), lte: now },
       appointment: { tenant: { active: true, suspended: false, whatsappInstance: { not: null } } },
       OR: [
-        { kind: { in: ['REMINDER', 'MANUAL_REMINDER', 'MERCHANT_CONFIRMED'] }, appointment: { startsAt: { gt: now }, status: 'CONFIRMED' } },
-        { kind: { notIn: ['REMINDER', 'MANUAL_REMINDER', 'MERCHANT_CONFIRMED', 'COMPLETED', 'FEEDBACK', 'BIRTHDAY', 'RETURN'] }, appointment: { tenant: { statusMessages: true } } },
+        { kind: { in: ['REMINDER', 'MANUAL_REMINDER', 'CS_AUTOMATION', 'MERCHANT_CONFIRMED'] }, appointment: { startsAt: { gt: now }, status: 'CONFIRMED' } },
+        { kind: { notIn: ['REMINDER', 'MANUAL_REMINDER', 'CS_AUTOMATION', 'MERCHANT_CONFIRMED', 'COMPLETED', 'FEEDBACK', 'BIRTHDAY', 'RETURN'] }, appointment: { tenant: { statusMessages: true } } },
         { kind: { in: ['COMPLETED', 'FEEDBACK'] }, appointment: { tenant: { completionMessages: true } } },
         { kind: { in: ['BIRTHDAY', 'RETURN'] } }
       ]
@@ -114,13 +136,13 @@ async function checkBilling() {
 }
 let billingPending: Promise<void> | undefined
 function tickBilling() {
-  if (!billingPending) billingPending = Promise.allSettled([checkBilling(), dispatchCommercial(stripe), scheduleBirthdays()]).then(results => {
+  if (!billingPending) billingPending = Promise.allSettled([checkBilling(), dispatchCommercial(stripe), scheduleBirthdays(), retryMediaCleanup()]).then(results => {
     if (results.some(result => result.status === 'rejected')) throw new Error('Falha ao processar assinaturas')
   })
     .catch(() => console.error('billing-reconciliation-unavailable')).finally(() => { billingPending = undefined })
 }
 function tick() {
-  if (!pending) pending = Promise.allSettled([publishReminders(), reconcileAppointments(), processAppointmentRefunds(stripe), notifyWaitList(), db.shopOrder.count({ where: { status: 'PENDING', paymentReview: false, expiresAt: { lte: new Date() } } })
+  if (!pending) pending = Promise.allSettled([publishReminders(), publishCampaigns(), reconcileAppointments(), processAppointmentRefunds(stripe), notifyWaitList(), db.shopOrder.count({ where: { status: 'PENDING', paymentReview: false, expiresAt: { lte: new Date() } } })
     .then(async count => { if (count) await reconcileOrders(await stripe()) })]).then(results => {
       if (results.some(result => result.status === 'rejected')) console.error('Falha em uma rotina do worker.')
     }).finally(() => { pending = undefined })
@@ -136,8 +158,8 @@ async function shutdown() {
   clearInterval(billingTimer)
   await billingPending
   await pending
-  await worker.close()
-  await queue.close()
+  await Promise.all([worker.close(), campaignWorker.close()])
+  await Promise.all([queue.close(), campaignQueue.close()])
   await db.$disconnect()
 }
 process.once('SIGTERM', shutdown)

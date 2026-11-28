@@ -1,6 +1,13 @@
 import type Stripe from 'stripe'
 import { db } from './db'
 import { AgendaError } from './agenda'
+import { businessSuiteOffer } from './business-plan'
+
+export const businessSuitePlanId = 'business-suite-v4'
+export const businessSuitePlan = {
+  name: 'Business Suite', description: 'Agenda, catálogo, gestão financeira e automações do estabelecimento.',
+  monthlyCents: businessSuiteOffer.monthly.cents, annualCents: businessSuiteOffer.annual.cents, trialDays: 0
+}
 
 type PlanInput = { name: string; description: string; monthlyCents: number; annualCents: number; trialDays: number }
 
@@ -12,6 +19,9 @@ async function versionPrice(api: Stripe, product: string, amount: number, interv
 export async function savePlan(
   actorId: string, planId: string, data: PlanInput, edit: boolean, getApi: () => Promise<Stripe>
 ) {
+  if (planId === businessSuitePlanId && (data.monthlyCents !== businessSuitePlan.monthlyCents || data.annualCents !== businessSuitePlan.annualCents)) {
+    throw new AgendaError('Os valores da oferta Business Suite são definidos na versão comercial.')
+  }
   const current = await db.plan.findUnique({ where: { id: planId } })
   if (edit && !current) throw new AgendaError('Plano indisponível.')
   if (!edit && current) {

@@ -34,8 +34,8 @@ export async function updatePublicDesign(form: FormData) {
   if (!parsed.success) redirect(path + '?design=dados')
   const design = parsed.data
   const [products, services] = await Promise.all([
-    db.product.count({ where: { tenantId, id: { in: design.productIds }, published: true, archivedAt: null } }),
-    db.service.count({ where: { tenantId, id: { in: design.serviceIds }, active: true, archivedAt: null } })
+    db.product.count({ where: { tenantId, id: { in: design.productIds }, published: member.tenant.active ? true : undefined, archivedAt: null } }),
+    db.service.count({ where: { tenantId, id: { in: design.serviceIds }, active: member.tenant.active ? true : undefined, archivedAt: null } })
   ])
   if (products !== design.productIds.length || services !== design.serviceIds.length) redirect(path + '?design=dados')
   await db.tenant.update({ where: { id: tenantId }, data: { publicDesignDraft: design } })

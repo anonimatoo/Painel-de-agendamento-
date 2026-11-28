@@ -1,3 +1,5 @@
+import { centsWithDiscount, comboItems } from '@/lib/offers'
+import { productGallery } from '@/lib/product-gallery'
 import Link from 'next/link'
 import { CalendarCheck, CalendarDays, CircleCheck, CreditCard, MapPin, ShoppingBag, Store, UserRound } from 'lucide-react'
 import { randomUUID } from 'node:crypto'
@@ -48,8 +50,13 @@ export default async function Establishment({ params, searchParams }: {
   }
   const draft = previewTenant === tenant.id && tenant.publicDesignDraft !== null
   const design = readPublicDesign(draft ? tenant.publicDesignDraft : tenant.publicDesign)
-  const visibleProducts = featuredFirst(tenant.products, design.productIds)
-  const visibleServices = featuredFirst(tenant.services, design.serviceIds)
+  const preparing = previewTenant === tenant.id && !tenant.active
+  const previewProducts = preparing ? await db.product.findMany({ where: { tenantId: tenant.id, archivedAt: null } }) : tenant.products
+  const previewServices = preparing ? await db.service.findMany({
+    where: { tenantId: tenant.id, archivedAt: null }, include: { assignments: { where: { professional: { active: true } }, include: { professional: true } } }
+  }) : tenant.services
+  const visibleProducts = featuredFirst(previewProducts, design.productIds)
+  const visibleServices = featuredFirst(previewServices, design.serviceIds)
   const hours = await db.workHours.findMany({ where: { tenantId: tenant.id, professional: { active: true } },
     select: { weekday: true, startMinute: true, endMinute: true }, distinct: ['weekday', 'startMinute', 'endMinute'],
     orderBy: [{ weekday: 'asc' }, { startMinute: 'asc' }], take: 21 })
@@ -70,6 +77,21 @@ export default async function Establishment({ params, searchParams }: {
   }) : null
   const order = typeof query.pedido === 'string' && query.pedido.length < 100
     ? await db.shopOrder.findFirst({ where: { id: query.pedido, tenantId: tenant.id }, select: { status: true, paymentReview: true } }) : null
+  const now = new Date()
+  const offers = tenant.active ? await db.commercialOffer.findMany({
+    where: { tenantId: tenant.id, enabled: true, startsAt: { lte: now }, endsAt: { gt: now } }
+  }) : []
+  const publicProducts = new Set(tenant.products.map(product => product.id))
+  const combos = offers.filter(offer => {
+    if (offer.kind !== 'COMBO') return false
+    const parsed = comboItems.safeParse(offer.items)
+    return parsed.success && parsed.data.every(item => publicProducts.has(item.productId))
+  })
+  const publicPrice = (product: typeof tenant.products[number]) => {
+    const base = product.promotionCents ?? product.cents
+    const bps = Math.max(0, ...offers.filter(offer => offer.kind === 'PROMOTION' && offer.productId === product.id).map(offer => offer.bps))
+    return Math.min(base, centsWithDiscount(product.cents, bps))
+  }
   const purchasable = tenant.active && !tenant.connectPausedAt && tenant.stripeAccountId && tenant.products.some(product => (product.promotionCents ?? product.cents) > 0)
   const today = DateTime.now().setZone(tenant.timezone).toISODate()!
   const day = typeof query.dia === 'string' ? query.dia : today
@@ -98,13 +120,18 @@ export default async function Establishment({ params, searchParams }: {
   const checkoutPhoto = chosen ? image('SERVICE', chosen.id) : null
   const steps = ['Serviço', 'Profissional', 'Data', 'Horário', 'Revisão', 'Pagamento', 'Confirmação']
   const stage = completed || confirmed ? 6 : payment ? 5 : slots.length ? 3 : professional ? 2 : 0
-  const productsSection = tenant.products.length > 0 && <article id="produtos"><h2>Produtos disponíveis</h2>
-        <ul className="storefront-products">{visibleProducts.map(product => <li key={product.id}>
-          {image('PRODUCT', product.id) && <img className="catalog-photo" src={'/api/imagens/' + image('PRODUCT', product.id)} alt="" />}
-          <div><strong>{product.name}</strong>{design.productIds.includes(product.id) && <span className="state-pill">Em destaque</span>}<p>{product.description}</p>{brl(product.promotionCents ?? product.cents)}</div>
+  const productsSection = visibleProducts.length > 0 && <article id="produtos"><h2>Produtos disponíveis</h2>
+        <ul className="storefront-products">{visibleProducts.map(product => <li key={product.id} id={'produto-' + product.id}>
+          {productGallery(tenant.media.filter(item => item.kind === 'PRODUCT'), product.id).slice(0,1).map(photo =>
+            <img key={photo.id} className="catalog-photo" src={'/api/imagens/' + photo.key} alt="" />)}
+          <div><strong>{product.name}</strong>{design.productIds.includes(product.id) && <span className="state-pill">Em destaque</span>}<p>{product.description}</p>{brl(publicPrice(product))}</div>
         </li>)}</ul>
         {purchasable && <details><summary>Montar pedido para retirada</summary><form action={shopCheckout.bind(null, slug)}>
           <input type="hidden" name="requestId" value={randomUUID()} />
+          {offers.some(offer => offer.kind === 'COUPON') && <Field name="coupon" label="Cupom" required={false} />}
+          {combos.length > 0 && <label>Adicionar combo<select name="combo"><option value="">Sem combo</option>
+            {combos.map(offer => <option key={offer.id} value={offer.id}>{offer.name} · {offer.bps / 100}% de desconto</option>)}
+          </select></label>}
           {visibleProducts.filter(product => (product.promotionCents ?? product.cents) > 0).map(product =>
             <Field key={product.id} label={'Unidades de ' + product.name} name={'product:' + product.id} type="number" min={0} max={Math.min(product.stock, 100)} value={0} />
           )}

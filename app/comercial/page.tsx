@@ -10,7 +10,7 @@ import { MerchantShell } from '../merchant-shell'
 import { commerce } from '../actions'
 import { brl, ErrorNote, Field } from '../ui'
 
-export default async function CommercePage({ searchParams }: { searchParams: Promise<{ erro?: string }> }) {
+export default async function CommercePage({ searchParams }: { searchParams: Promise<{ erro?: string; inventario?: string }> }) {
   const user = await userSession()
   if (!user) redirect('/login')
   const member = await membership(user.id)
@@ -44,7 +44,7 @@ export default async function CommercePage({ searchParams }: { searchParams: Pro
     <article><h2>Contas a pagar e a receber</h2>
       {can(member, 'finance.write') && <form className="inline" action={commerce.bind(null, 'entry')}>
         <Field label="Descrição" name="title" />
-        <label>Tipo<select name="kind"><option value="INCOME">Receita</option><option value="EXPENSE">Despesa</option></select></label>
+        <label>Tipo<select name="kind"><option value="INCOME">Receita</option><option value="EXPENSE">Despesa</option></select></label><label>Classificação<select name="classification"><option value="GENERAL">Geral</option><option value="TAX">Imposto</option></select></label>
         <Field label="Valor em centavos" name="cents" type="number" min={1} /><Field label="Vencimento" name="dueAt" type="date" />
         <label className="check"><input name="paid" type="checkbox" /> Já liquidado</label><button>Registrar lançamento</button>
       </form>}
@@ -57,6 +57,7 @@ export default async function CommercePage({ searchParams }: { searchParams: Pro
       {rows.length ? <ul>{rows.map((row, index) => <li key={index}>{date(row.date)} · {row.title} · {brl(row.cents)}</li>)}</ul> : <p>Nenhuma movimentação liquidada neste mês.</p>}
     </article>
     </>}{stock && <article id="estoque"><h2>Produtos e estoque</h2><div id="vendas" />
+      {query.inventario && <p className="success" role="status">Contagem conferida. Diferenças registradas no histórico de estoque.</p>}
       {!products.length && <p>Cadastre os produtos na seção Equipe e catálogo do painel.</p>}
       {products.map(product => <details key={product.id}>
         <summary>{product.name} · {product.stock} em estoque{product.stock <= product.minimumStock ? ' · Estoque baixo' : ''}</summary>
@@ -71,6 +72,12 @@ export default async function CommercePage({ searchParams }: { searchParams: Pro
         {can(member, 'stock.manage') && <form className="inline" action={commerce.bind(null, 'stock')}>
           <input type="hidden" name="productId" value={product.id} /><input type="hidden" name="requestId" value={randomUUID()} />
           <Field label="Ajuste de unidades (positivo ou negativo)" name="quantity" type="number" /><button className="outline">Ajustar estoque</button>
+        </form>}
+        {can(member, 'stock.manage') && !product.archivedAt && <form className="inline" action={commerce.bind(null, 'count-stock')}>
+          <input type="hidden" name="productId" value={product.id} /><input type="hidden" name="requestId" value={randomUUID()} />
+          <input type="hidden" name="expectedStock" value={product.stock} />
+          <Field label="Unidades contadas no inventário" name="count" type="number" min={0} max={1000000} />
+          <button className="outline">Conferir inventário</button>
         </form>}
         {can(member, 'sale.create') && product.stock > 0 && <form className="inline" action={commerce.bind(null, 'sale')}>
           <input type="hidden" name="productId" value={product.id} /><input type="hidden" name="requestId" value={randomUUID()} />
@@ -89,7 +96,7 @@ export default async function CommercePage({ searchParams }: { searchParams: Pro
     </li>)}</ul> : <p>Nenhum pedido online.</p>}</article>
     }{stock && <article><h2>Histórico de estoque</h2>
       {history.length ? <ul>{history.map(item => <li key={item.id}>
-        {date(item.createdAt)} · {item.product.name} · {item.quantity > 0 ? '+' : ''}{item.quantity} · {item.kind === 'SALE' ? 'Venda presencial' : item.kind === 'REVERSAL' ? 'Cancelamento de venda' : 'Ajuste'}
+        {date(item.createdAt)} · {item.product.name} · {item.quantity > 0 ? '+' : ''}{item.quantity} · {item.kind === 'SALE' ? 'Venda presencial' : item.kind === 'REVERSAL' ? 'Cancelamento de venda' : item.requestId.startsWith('inventory:') ? 'Diferença de inventário' : item.requestId.startsWith('purchase:') ? 'Compra recebida' : 'Ajuste'}
         {item.kind === 'SALE' && !item.reversedAt && can(member, 'sale.create') && <form action={commerce.bind(null, 'reverse')}>
           <input type="hidden" name="id" value={item.id} /><button className="outline">Cancelar venda e devolver ao estoque</button>
         </form>}

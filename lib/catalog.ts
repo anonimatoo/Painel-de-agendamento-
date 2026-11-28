@@ -14,7 +14,7 @@ export function parseReais(input: string) {
 }
 
 export type ProductDetails = {
-  name: string; sku: string | null; category: string; description: string; cents: number; costCents: number;
+  name: string; sku: string | null; barcode?: string | null; category: string; description: string; cents: number; costCents: number;
   promotionCents: number | null; minimumStock: number; published: boolean
 }
 
@@ -25,6 +25,10 @@ export async function saveCatalogProduct(tenantId: string, details: ProductDetai
     throw new AgendaError('O preço promocional deve ser positivo e menor ou igual ao preço normal.')
   }
   return db.$transaction(async tx => {
+    await tx.$queryRaw`SELECT id FROM "Tenant" WHERE id = ${tenantId} FOR UPDATE`
+    const tenant = await tx.tenant.findUnique({ where: { id: tenantId }, select: { active: true, suspended: true } })
+    if (!tenant || tenant.suspended) throw new AgendaError('Estabelecimento indisponível.')
+    const values = { ...details, published: tenant.active && details.published }
     const { id, parentId, stock, expectedStock } = options
     if (id) {
       await tx.$queryRaw`SELECT id FROM "Product" WHERE id = ${id} AND "tenantId" = ${tenantId} FOR UPDATE`
@@ -36,7 +40,7 @@ export async function saveCatalogProduct(tenantId: string, details: ProductDetai
         throw new AgendaError('O estoque mudou enquanto você editava. Consulte o saldo atual antes de ajustar novamente.')
       }
       const saved = await tx.product.update({ where: { tenantId_id: { tenantId, id } }, data: {
-        ...details, stock: delta ? { increment: delta } : undefined
+        ...values, stock: delta ? { increment: delta } : undefined
       } })
       if (delta) await tx.stockMovement.create({
         data: { tenantId, productId: id, quantity: delta, kind: 'ADJUSTMENT', requestId: randomUUID() }
@@ -47,7 +51,7 @@ export async function saveCatalogProduct(tenantId: string, details: ProductDetai
       const parent = await tx.product.findFirst({ where: { tenantId, id: parentId, archivedAt: null, variantOfId: null } })
       if (!parent) throw new AgendaError('O produto principal está indisponível.')
     }
-    const created = await tx.product.create({ data: { ...details, tenantId, stock: stock ?? 0, variantOfId: parentId } })
+    const created = await tx.product.create({ data: { ...values, tenantId, stock: stock ?? 0, variantOfId: parentId } })
     if (stock) await tx.stockMovement.create({
       data: { tenantId, productId: created.id, quantity: stock, kind: 'ADJUSTMENT', requestId: randomUUID() }
     })

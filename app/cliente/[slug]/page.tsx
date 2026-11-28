@@ -1,3 +1,5 @@
+import { communicationPreference } from './preferences'
+import { loyaltyBalance, loyaltyThreshold } from '@/lib/loyalty'
 import Link from 'next/link'
 import { notFound, redirect } from 'next/navigation'
 import { CalendarDays, CalendarPlus, History, ShoppingBag, UserRound, Wallet } from 'lucide-react'
@@ -19,7 +21,7 @@ const refundStatus: Record<string, string> = { QUEUED: 'Estorno programado', SUB
 const orderLabels: Record<string, string> = { PAID: 'Pago', PENDING: 'Pagamento pendente', CANCELED: 'Cancelado', REFUNDED: 'Estornado' }
 
 export default async function ConsumerPage({ params, searchParams }: {
-  params: Promise<{ slug: string }>; searchParams: Promise<{ erro?: string; criar?: string; social?: string; perfil?: string; alteracao?: string; atendimento?: string; dia?: string }>
+  params: Promise<{ slug: string }>; searchParams: Promise<{ erro?: string; criar?: string; social?: string; comunicacao?: string; perfil?: string; alteracao?: string; atendimento?: string; dia?: string }>
 }) {
   const { slug } = await params
   const store = await activeStore(slug)
@@ -70,6 +72,7 @@ export default async function ConsumerPage({ params, searchParams }: {
   const slots = selected ? await availability(store, selected.serviceId, selected.professionalId, searchDay, db, selected.id) : []
   const date = (value: Date) => new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short', timeZone: store.timezone }).format(value)
   const upcoming = appointments.filter(row => row.startsAt > new Date() && ['CONFIRMED', 'PENDING'].includes(row.status))
+  const loyalty = store.loyaltyEnabled && profile ? await loyaltyBalance(store.id, profile.userId) : null
   const summaries = [
     { title: 'Agendar', href: publicPath + '#agendar', icon: CalendarPlus },
     { title: 'Comprar produtos', href: publicPath + '#produtos', icon: ShoppingBag },
@@ -112,8 +115,30 @@ export default async function ConsumerPage({ params, searchParams }: {
           {!appointments.some(row => row.paidAt) && !orders.some(row => row.paidAt) && <p>Nenhum pagamento confirmado.</p>}
         </article>
         <article id="historico"><h2>Histórico de atendimentos</h2>
+          {loyalty && <p>Fidelidade · {loyalty.attendances} atendimentos concluídos · {loyalty.available} resgates disponíveis a cada {loyaltyThreshold} visitas.</p>}
           {appointments.map(row => <div className="consumer-item" key={row.id}><div><strong>{row.service.name}</strong><p>{date(row.startsAt)} · {row.professional.name}</p></div><span>{appointmentLabels[row.status]}</span></div>)}
           {!appointments.length && <p>Nenhum atendimento registrado nesta conta.</p>}
+        </article>
+        <article id="comunicacoes"><h2>Preferências de comunicação</h2>
+          <p>Escolha se deseja receber campanhas de {store.name}. Você pode cancelar a autorização aqui a qualquer momento.</p>
+          {query.comunicacao === 'salvo' && <p className="success" role="status">Preferências salvas.</p>}
+          {query.comunicacao === 'erro' && <p className="error" role="alert">Não foi possível atualizar. Confira seu telefone, e-mail ou código e tente novamente.</p>}
+          {query.comunicacao === 'codigo' && <p className="success" role="status">Confira o código recebido no WhatsApp.</p>}
+          <form action={communicationPreference.bind(null, slug)}>
+            {profile.marketingEmailAt && profile.marketingEmail === user?.email ?
+              <button className="outline" name="command" value="email-off">Cancelar autorização por e-mail</button> :
+              user?.emailVerifiedAt ? <button className="outline" name="command" value="email-on">Autorizar novidades por e-mail</button> :
+                <p>Confirme seu e-mail em <Link href="/conta">Segurança da conta</Link> para autorizar campanhas por e-mail.</p>}
+          </form>
+          {profile.marketingPhoneAt && profile.marketingPhone === profile.phone ?
+            <form action={communicationPreference.bind(null, slug)}><button className="outline" name="command" value="whatsapp-off">Cancelar autorização por WhatsApp</button></form> :
+            store.whatsappInstance && <>
+              <form action={communicationPreference.bind(null, slug)}><button className="outline" name="command" value="whatsapp-code">Enviar código de autorização ao meu WhatsApp</button></form>
+              {profile.marketingPhoneCodeUntil && profile.marketingPhoneCodeUntil > new Date() && <form action={communicationPreference.bind(null, slug)}>
+                <label>Código de seis dígitos<input name="code" inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6}" maxLength={6} required /></label>
+                <button name="command" value="whatsapp-on">Confirmar e autorizar campanhas por WhatsApp</button>
+              </form>}
+            </>}
         </article>
         <article id="meus-dados"><h2>Meus dados</h2>
           <p>{user?.email}</p><form action={consumerAccess.bind(null, slug, 'profile')}>

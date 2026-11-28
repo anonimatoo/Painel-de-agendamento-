@@ -1,3 +1,4 @@
+import { queueAutomation } from './automation'
 import type { Prisma } from '@prisma/client'
 import type Stripe from 'stripe'
 import { stripeClient, stripeConfiguration } from './stripe-settings'
@@ -91,6 +92,7 @@ export async function settleAppointment(tx: Prisma.TransactionClient, account: s
       await scheduleReminder(tx, appointment.tenant, { ...appointment, status: 'CONFIRMED' })
       await enqueueStatus(tx, appointment.tenant, appointment, 'PAID')
       await enqueueMerchantConfirmation(tx, appointment.tenant, appointment)
+      await queueAutomation(tx, appointment, 'CONFIRMED')
       await tx.appointmentHistory.create({ data: { appointmentId: appointment.id, operation: 'PAYMENT_CONFIRMED' } })
     }
   }

@@ -24,6 +24,8 @@ import { changeConnectAvailability, connectStatus, startConnectOnboarding, openA
 import { stripe } from '@/lib/stripe'
 import { allowAttempt, consumeAccountToken, mailConfigured, sendAccountLink } from '@/lib/account-security'
 import { consumeMfaRecovery, finishMfaSetup, issueMfaRecovery, startMfaSetup, verifyMfa } from '@/lib/mfa'
+import { checkoutMethods, pixMinimumCents } from '@/lib/checkout-method'
+import { currentConsumer } from '@/lib/consumer'
 import { deleteMedia, storeMedia } from '@/lib/storage'
 
 const title = z.string().trim().min(2).max(100)
@@ -34,6 +36,7 @@ const cents = z.coerce.number().int().min(0).max(100_000_000)
 const phone = z.string().transform(s => s.replace(/\D/g, '')).pipe(z.string().regex(/^55\d{10,11}$/))
 const base = () => new URL(process.env.APP_URL ?? 'http://localhost:3000').origin
 const clock = z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/).transform(s => Number(s.slice(0, 2)) * 60 + Number(s.slice(3)))
+const checkoutChoice = z.enum(['card', 'pix']).default('card')
 const credentials = z.object({ email: z.string().trim().toLowerCase().email().max(254), password: z.string().min(12).max(128) })
 const pay = z.object({ planId: id, cycle: z.enum(['monthly', 'annual']) })
 
@@ -49,7 +52,7 @@ async function perform(operation: () => Promise<string>, fallback: string) {
     else if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') message = 'Já existe um cadastro com esses dados.'
     else if (error instanceof Error && /appointment_no_overlap|23P01/.test(error.message)) message = 'Esse horário acabou de ser reservado.'
     else console.error('agenda-action', error instanceof Error ? error.name : 'unknown')
-    target = fallback + '?erro=' + encodeURIComponent(message)
+    target = fallback + (fallback.includes('?') ? '&erro=' : '?erro=') + encodeURIComponent(message)
   }
   redirect(target)
 }
@@ -61,7 +64,7 @@ export async function account(form: FormData) {
       throw new AgendaError('Aguarde alguns minutos antes de tentar novamente.')
     }
     const user = await db.user.findUnique({ where: { email: data.email } })
-    if (!(await verifyPassword(data.password, user?.password)) || !user) throw new AgendaError('E-mail ou senha inválidos.')
+    if (!(await verifyPassword(data.password, user?.password)) || !user || (form.get('access') === 'admin' && !user.platformAdmin)) throw new AgendaError('E-mail ou senha inválidos.')
     if (user.platformAdmin && user.mfaSecret) {
       const code = z.string().trim().max(27).parse(form.get('code') ?? '')
       const valid = /^\d{6}$/.test(code) ? await verifyMfa(user, code) : await consumeMfaRecovery(user, code)
@@ -161,6 +164,9 @@ export async function logout() {
 }
 
 export async function manage(operation: string, form: FormData) {
+  const section = form.get('dashboardSection')
+  const sections: Record<string, string> = { customer: 'clientes', professional: 'profissionais', assignment: 'profissionais', hours: 'profissionais', settings: 'configuracoes' }
+  const dashboard = section && sections[operation] === section ? '/dashboard?secao=' + section : '/dashboard'
   await perform(async () => {
     const user = await userSession()
     if (!user) return '/login'
@@ -201,12 +207,15 @@ export async function manage(operation: string, form: FormData) {
           break
         }
         const onlinePayment = form.has('onlinePayment')
-        if (onlinePayment && (!tenant.stripeAccountId || !(await connectStatus(tenant.stripeAccountId)).payments)) {
+        const pixCheckoutEnabled = form.has('pixCheckoutEnabled')
+        const methods = (onlinePayment || pixCheckoutEnabled) && tenant.stripeAccountId ? await connectStatus(tenant.stripeAccountId) : null
+        if (pixCheckoutEnabled && !methods?.pix) throw new AgendaError('A Stripe ainda não habilitou o Pix para esta conta de recebimentos.')
+        if (onlinePayment && !methods?.payments) {
           throw new AgendaError('Conclua a configuração da conta para aceitar pagamentos.')
         }
         await db.tenant.update({ where: { id: tenantId }, data: {
           ...data, statusMessages: Boolean(tenant.whatsappInstance && form.has('statusMessages')), reminderTemplate: data.reminderTemplate || null, reminderMinutes: data.reminderMinutes || null,
-          onlinePayment
+          onlinePayment, pixCheckoutEnabled
         } })
         break
       }
@@ -294,6 +303,8 @@ export async function brandSettings(operation: 'profile' | 'upload' | 'delete' |
     if (operation === 'profile') {
       const values = z.object({
         theme: z.enum(['light', 'dark']), policies: text,
+        name: title.optional(), description: text.optional(), address: text.optional(),
+        color: z.string().regex(/^#[a-fA-F0-9]{6}$/).optional(),
         instagramUrl: z.union([z.literal(''), z.string().max(250).regex(/^https:\/\/(?:www\.)?instagram\.com\/[\w.]+\/?$/i)]),
         contactPhone: z.union([z.literal(''), phone])
       }).parse(Object.fromEntries(form))
@@ -507,17 +518,25 @@ export async function admin(operation: 'plan' | 'suspend' | 'whatsapp' | 'stripe
 export async function reserve(link: string, form: FormData) {
   const path = '/estabelecimento/' + encodeURIComponent(link)
   await perform(async () => {
-    const data = z.object({ serviceId: id, professionalId: id, startsAt: z.string().datetime(), name: title, phone }).parse(Object.fromEntries(form))
+    const data = z.object({ serviceId: id, professionalId: id, startsAt: z.string().datetime(), name: title, phone, checkoutMethod: checkoutChoice }).parse(Object.fromEntries(form))
     const tenant = await db.tenant.findFirst({ where: { slug: link, active: true, suspended: false } })
     if (!tenant) throw new AgendaError('Agendamento indisponível.')
     if (!(await allowAttempt('reservation', tenant.id + ':' + data.phone, 10, 1800))) throw new AgendaError('Aguarde antes de iniciar outra reserva.')
-    const service = await db.service.findFirst({ where: { tenantId: tenant.id, id: data.serviceId, active: true } })
+    const service = await db.service.findFirst({ where: { tenantId: tenant.id, id: data.serviceId, active: true, archivedAt: null } })
     if (!service) throw new AgendaError('Serviço indisponível.')
     const online = tenant.onlinePayment && service.cents > 0
     const account = tenant.stripeAccountId
     if (online && tenant.connectPausedAt) throw new AgendaError('O estabelecimento pausou novos pagamentos online. Entre em contato para agendar.')
-    if (online && (!account || !(await connectStatus(account, await stripeForNewPayments())).payments)) throw new AgendaError('O pagamento está indisponível no momento.')
-    const appointment = await book(tenant, { ...data, consent: form.has('consent'), online, checkoutReturnUrl: base() + path })
+    if (online) {
+      const methods = account ? await connectStatus(account, await stripeForNewPayments()) : null
+      if (data.checkoutMethod === 'pix') {
+        if (!tenant.pixCheckoutEnabled || !methods?.pix || Math.ceil(service.cents * tenant.depositPercent / 100) < pixMinimumCents) {
+          throw new AgendaError('Pix indisponível para este agendamento.')
+        }
+      } else if (!methods?.payments) throw new AgendaError('O pagamento está indisponível no momento.')
+    }
+    const consumer = await currentConsumer(tenant.id)
+    const appointment = await book(tenant, { ...data, consumerUserId: consumer?.userId, consent: form.has('consent'), online, checkoutMethod: online ? data.checkoutMethod : undefined, checkoutReturnUrl: base() + path })
     if (!online || !account) return path + '?reserva=' + appointment.id
     const session = await openAppointmentCheckout(appointment).catch(() => null)
     return session?.status === 'open' && session.url ? session.url : path + '?pagamento=' + appointment.paymentToken
@@ -536,7 +555,7 @@ export async function joinWaitlist(link: string, form: FormData) {
     if (start < today || start > today.plus({ days: 90 })) throw new AgendaError('Escolha uma data até 90 dias à frente.')
     if (!(await allowAttempt('waitlist', tenant.id + ':' + number, 6, 3600))) throw new AgendaError('Aguarde antes de fazer outro pedido.')
     const tenantId = tenant.id
-    if (!await db.assignment.findFirst({ where: { tenantId, serviceId, professionalId, service: { active: true }, professional: { active: true } } })) {
+    if (!await db.assignment.findFirst({ where: { tenantId, serviceId, professionalId, service: { active: true, archivedAt: null }, professional: { active: true } } })) {
       throw new AgendaError('Esse profissional não está disponível para o serviço escolhido.')
     }
     await db.waitEntry.upsert({
@@ -550,22 +569,24 @@ export async function joinWaitlist(link: string, form: FormData) {
 export async function shopCheckout(link: string, form: FormData) {
   const path = '/estabelecimento/' + encodeURIComponent(link)
   await perform(async () => {
-    const values = z.object({ name: title, phone, requestId: z.uuid() }).parse(Object.fromEntries(form))
+    const values = z.object({ name: title, phone, requestId: z.uuid(), checkoutMethod: checkoutChoice }).parse(Object.fromEntries(form))
     const tenant = await db.tenant.findFirst({ where: { slug: link, active: true, suspended: false, stripeAccountId: { not: null } } })
     if (!tenant?.stripeAccountId || tenant.connectPausedAt) throw new AgendaError('Compras online indisponíveis.')
     const account = tenant.stripeAccountId
     const api = await stripeForNewPayments()
-    if (!(await connectStatus(account, api)).payments) throw new AgendaError('Compras online indisponíveis.')
+    const methods = await connectStatus(account, api)
+    if (values.checkoutMethod === 'pix' ? (!tenant.pixCheckoutEnabled || !methods.pix) : !methods.payments) throw new AgendaError('O método escolhido está indisponível para esta compra.')
     if (!(await allowAttempt('shop-checkout', tenant.id + ':' + values.phone, 6, 1800))) throw new AgendaError('Aguarde antes de iniciar outro pedido.')
     const count = z.coerce.number().int().min(0).max(100)
     const cart = [...form.entries()].filter(([key]) => key.startsWith('product:')).map(([key, value]) => ({
       productId: id.parse(key.slice('product:'.length)), quantity: count.parse(value)
     })).filter(item => item.quantity)
     if (!cart.length) throw new AgendaError('Selecione ao menos um produto.')
-    const order = await reserveOrder({ tenantId: tenant.id, cart, ...values })
+    const consumer = await currentConsumer(tenant.id)
+    const order = await reserveOrder({ tenantId: tenant.id, cart, ...values, consumerUserId: consumer?.userId })
     if (order.status !== 'PENDING' || order.expiresAt <= new Date()) return path + '?pedido=' + order.id
     const session = await api.checkout.sessions.create({
-      mode: 'payment', payment_method_types: ['card'], expires_at: +order.expiresAt / 1000,
+      mode: 'payment', ...checkoutMethods(order.checkoutMethod), expires_at: +order.expiresAt / 1000,
       line_items: order.items.map(item => ({
         quantity: item.quantity, price_data: { currency: 'brl', unit_amount: item.unitCents, product_data: { name: item.name } }
       })),

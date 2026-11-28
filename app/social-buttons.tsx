@@ -4,7 +4,7 @@ import { useFormStatus } from 'react-dom'
 import { socialSignIn } from './auth-actions'
 import type { SocialProvider } from '@/lib/social-oidc'
 
-function ProviderButton({ provider }: { provider: SocialProvider }) {
+export function ProviderButton({ provider }: { provider: SocialProvider }) {
   const { pending } = useFormStatus()
   return <button className={'social-button social-' + provider} disabled={pending} aria-busy={pending}
     aria-label={provider === 'google' ? 'Continuar com Google' : 'Continuar com Apple'}>

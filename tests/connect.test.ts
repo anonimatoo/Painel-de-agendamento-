@@ -21,6 +21,7 @@ test('o SDK envia JSON para Accounts v2 e mantém a versão v1 ao consultar habi
   }
   let chargesEnabled = true
   let linkAccount = accountId
+  let pixActive = false
   let rejectCreate = false
   const server = createServer(async (request, response) => {
     let data = ''
@@ -36,7 +37,7 @@ test('o SDK envia JSON para Accounts v2 e mantém a versão v1 ao consultar habi
     const result = path.endsWith('/account_links')
       ? { account: linkAccount, url: 'https://accounts.stripe.com/r/test' }
       : path.startsWith('/v1/')
-        ? { id: accountId, charges_enabled: chargesEnabled, payouts_enabled: false, details_submitted: true }
+        ? { id: accountId, country: 'BR', charges_enabled: chargesEnabled, payouts_enabled: false, details_submitted: true, capabilities: { pix_payments: pixActive ? 'active' : 'inactive' } }
         : v2
     response.end(JSON.stringify(result))
   })
@@ -71,7 +72,7 @@ test('o SDK envia JSON para Accounts v2 e mantém a versão v1 ao consultar habi
       } }
     })
     assert.deepEqual(await readConnectStatus(api, accountId), {
-      payments: true, payouts: false, submitted: true, requirements: 'currently_due', transfers: 'pending'
+      payments: true, pix: false, payouts: false, submitted: true, requirements: 'currently_due', transfers: 'pending'
     })
     const snapshot = requests.find(item => item.path === '/v1/accounts/' + accountId)
     assert.equal(snapshot?.headers['stripe-version'], '2025-08-27.basil')
@@ -79,8 +80,11 @@ test('o SDK envia JSON para Accounts v2 e mantém a versão v1 ao consultar habi
     const query = new URL(lookup!.path, 'https://api.stripe.com').searchParams
     assert.deepEqual([...query.values()], ['configuration.merchant', 'configuration.recipient', 'requirements'])
 
+    pixActive = true
+    assert.equal((await readConnectStatus(api, accountId)).pix, true)
     chargesEnabled = false
     assert.equal((await readConnectStatus(api, accountId)).payments, false)
+    assert.equal((await readConnectStatus(api, accountId)).pix, false)
     chargesEnabled = true
     v2.configuration.merchant.capabilities.card_payments.status = 'restricted'
     assert.equal((await readConnectStatus(api, accountId)).payments, false)

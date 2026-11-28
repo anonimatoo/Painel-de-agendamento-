@@ -21,7 +21,7 @@ export async function registerAccount(social: boolean, _: RegisterState, form: F
   const email = signupEmail.safeParse(social ? signup?.email : form.get('email'))
   const password = social ? null : signupPassword.safeParse(form.get('password'))
   const values = { business: String(form.get('business') ?? '').slice(0, 100), email: social ? undefined : String(form.get('email') ?? '').slice(0, 254) }
-  if (social && (!signup || !email.success)) return { ...values, message: 'Sua confirmação expirou. Volte e entre pelo provedor novamente.' }
+  if (social && (!signup || signup.consumerSlug || !email.success)) return { ...values, message: 'Sua confirmação expirou. Volte e entre pelo provedor novamente.' }
   if (!business.success || !email.success || password?.success === false) return { ...values, fields: {
     business: business.success ? undefined : business.error.issues[0].message,
     email: email.success ? undefined : 'Informe um e-mail válido.',

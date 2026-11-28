@@ -4,7 +4,7 @@ import { stripeClient, stripeConfiguration } from './stripe-settings'
 import { refreshAccess, updateInvoice, updateSubscription } from './billing-sync'
 import { db } from './db'
 import { settleOrder, settleOrderRefund } from './orders'
-import { enqueueStatus, scheduleReminder } from './agenda'
+import { enqueueMerchantConfirmation, enqueueStatus, scheduleReminder } from './agenda'
 
 export async function stripe() {
   return stripeClient((await stripeConfiguration()).secret)
@@ -19,7 +19,8 @@ export async function applyEvent(event: Stripe.Event, client?: Stripe) {
 
     if (event.account && ['checkout.session.completed', 'checkout.session.async_payment_succeeded', 'checkout.session.expired', 'checkout.session.async_payment_failed'].includes(event.type)) {
       const session = event.data.object as Stripe.Checkout.Session
-      const expired = event.type === 'checkout.session.expired' && session.status === 'expired'
+      const expired = (event.type === 'checkout.session.expired' && session.status === 'expired') ||
+        (event.type === 'checkout.session.async_payment_failed' && session.status === 'complete' && session.payment_status === 'unpaid')
       await settleAppointment(tx, event.account, session, expired)
       await settleOrder(tx, event.account, session, expired)
     }
@@ -30,10 +31,10 @@ export async function applyEvent(event: Stripe.Event, client?: Stripe) {
       if (refund.status === 'succeeded' && refund.metadata?.appointmentId) {
         const paymentIntentId = typeof refund.payment_intent === 'string' ? refund.payment_intent : refund.payment_intent?.id
         const appointment = await tx.appointment.findFirst({
-          where: { id: refund.metadata.appointmentId, tenant: { stripeAccountId: event.account }, paymentIntentId, paidAt: { not: null } }
+          where: { id: refund.metadata.appointmentId, OR: [{ checkoutAccountId: event.account }, { checkoutAccountId: null, tenant: { stripeAccountId: event.account } }], paymentIntentId, paidAt: { not: null } }
         })
         if (paymentIntentId && appointment && refund.currency === 'brl' && refund.amount === (appointment.chargeCents ?? appointment.cents)) {
-          await tx.appointment.update({ where: { id: appointment.id }, data: { refundedAt: new Date(), status: 'CANCELED' } })
+          await recordAppointmentRefund(tx, appointment.tenantId, appointment.id)
         }
       }
     }
@@ -81,7 +82,8 @@ export async function settleAppointment(tx: Prisma.TransactionClient, account: s
     return
   }
   if (expired && session.payment_status !== 'paid') {
-    await tx.appointment.updateMany({ where: { id: appointment.id, status: 'PENDING' }, data: { checkoutId: session.id, status: 'CANCELED', checkoutState: 'EXPIRED' } })
+    const expired = await tx.appointment.updateMany({ where: { id: appointment.id, status: 'PENDING' }, data: { checkoutId: session.id, status: 'CANCELED', checkoutState: 'EXPIRED' } })
+    if (expired.count) await tx.appointmentHistory.create({ data: { appointmentId: appointment.id, operation: 'PAYMENT_EXPIRED' } })
   } else if (session.payment_status === 'paid' && session.amount_total === (appointment.chargeCents ?? appointment.cents) && session.currency === 'brl') {
     const paymentIntentId = typeof session.payment_intent === 'string' ? session.payment_intent : session.payment_intent?.id
     const updated = await tx.appointment.updateMany({
@@ -91,7 +93,20 @@ export async function settleAppointment(tx: Prisma.TransactionClient, account: s
     if (updated.count) {
       await scheduleReminder(tx, appointment.tenant, { ...appointment, status: 'CONFIRMED' })
       await enqueueStatus(tx, appointment.tenant, appointment, 'PAID')
+      await enqueueMerchantConfirmation(tx, appointment.tenant, appointment)
       await tx.appointmentHistory.create({ data: { appointmentId: appointment.id, operation: 'PAYMENT_CONFIRMED' } })
     }
+  }
+}
+
+export async function recordAppointmentRefund(tx: Prisma.TransactionClient, tenantId: string, appointmentId: string) {
+  const updated = await tx.appointment.updateMany({
+    where: { id: appointmentId, tenantId, paidAt: { not: null }, refundedAt: null },
+    data: { refundedAt: new Date(), status: 'CANCELED' }
+  })
+  if (updated.count) {
+    const appointment = await tx.appointment.findUniqueOrThrow({ where: { id: appointmentId }, include: { tenant: true } })
+    await tx.appointmentHistory.create({ data: { appointmentId, operation: 'REFUNDED' } })
+    await enqueueStatus(tx, appointment.tenant, appointment, 'CANCELED')
   }
 }

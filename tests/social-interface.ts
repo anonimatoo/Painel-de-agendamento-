@@ -19,6 +19,7 @@ const google = 'fixture.apps.googleusercontent.com'
 const apple = 'com.example.fixture'
 const suffix = randomUUID()
 const email = 'social-' + suffix + '@gmail.com'
+const consumerEmail = 'consumer-' + suffix + '@gmail.com'
 const appleEmail = 'apple-' + suffix + '@privaterelay.appleid.com'
 const googleSecret = 'google-secret-fixture'
 const adminEmail = 'admin-' + suffix + '@example.test'
@@ -29,7 +30,7 @@ const tenantIds: string[] = []
 async function main() {
   const datasource = new URL(process.env.DATABASE_URL ?? 'postgresql://invalid/invalid')
   assert.equal(base.hostname, '127.0.0.1')
-  assert.ok(['127.0.0.1', 'localhost'].includes(datasource.hostname) && datasource.pathname === '/cs_social_test', 'Use o banco local dedicado cs_social_test.')
+  assert.ok(['127.0.0.1', 'localhost'].includes(datasource.hostname) && /^\/cs_social_test(?:_[a-z0-9]+)?$/.test(datasource.pathname), 'Use o banco local dedicado cs_social_test.')
   assert.equal(await db.socialProviderSettings.count(), 0)
   const signing = await generateKeyPair('RS256')
   const appleClient = await generateKeyPair('ES256', { extractable: true })
@@ -142,6 +143,7 @@ globalThis.fetch = (input, options) => {
     await context.clearCookies()
 
     let badState = true
+    let portalAttempt = false
     let callback: URL | undefined
     await context.route('https://accounts.google.com/o/oauth2/v2/auth?**', async route => {
       const auth = new URL(route.request().url())
@@ -149,7 +151,7 @@ globalThis.fetch = (input, options) => {
       const nonce = auth.searchParams.get('nonce')!
       const challenge = auth.searchParams.get('code_challenge')!
       assert.equal(auth.searchParams.get('code_challenge_method'), 'S256')
-      grants.set(code, { nonce, challenge, email, subject: suffix })
+      grants.set(code, { nonce, challenge, email: portalAttempt ? consumerEmail : email, subject: portalAttempt ? 'consumer-' + suffix : suffix })
       callback = new URL('/api/auth/google/callback', base)
       callback.searchParams.set('state', badState ? randomToken() : auth.searchParams.get('state')!)
       callback.searchParams.set('code', code)
@@ -219,17 +221,34 @@ globalThis.fetch = (input, options) => {
     assert.equal(verifiedAppleClient, true)
     assert.equal(exchanges, 3)
 
+    const fixture = await db.tenant.update({ where: { id: tenantIds[0] }, data: { active: true } })
+    portalAttempt = true
+    await context.clearCookies()
+    await page.goto(new URL('/cliente/' + fixture.slug, base).href)
+    await page.getByRole('button', { name: 'Continuar com Google' }).click()
+    await page.getByRole('heading', { name: 'Complete seu perfil' }).waitFor()
+    assert.equal(await page.locator('input[type=password]').count(), 0)
+    await page.getByLabel('Nome completo').fill('Cliente Social')
+    await page.getByLabel('WhatsApp ou telefone com DDI (55)').fill('5511999994444')
+    await page.getByRole('button', { name: 'Salvar perfil' }).click()
+    await page.getByRole('heading', { name: 'Olá, Cliente!' }).waitFor()
+    const consumer = await db.user.findUniqueOrThrow({ where: { email: consumerEmail }, include: { memberships: true, consumerProfiles: true } })
+    assert.equal(consumer.password, null)
+    assert.equal(consumer.memberships.length, 0)
+    assert.equal(consumer.consumerProfiles[0].tenantId, fixture.id)
+    assert.equal(exchanges, 4)
+
     await db.socialProviderSettings.updateMany({ data: { enabled: false } })
     await page.goto(new URL('/login', base).href)
     assert.equal(await page.getByRole('button', { name: /Continuar com (Google|Apple)/ }).count(), 0)
-    console.log('Chromium 390/1280 px: configuração Super Admin, formulário, cadastro e login Google simulados, estado inválido, reuso e provedores desativados. Callback Apple POST e JWT verificados em HTTP simulado.')
+    console.log('Chromium 390/1280 px: configuração Super Admin, formulário, cadastro do comerciante e do consumidor e login Google simulados, estado inválido, reuso e provedores desativados. Callback Apple POST e JWT verificados em HTTP simulado.')
   } finally {
     await browser?.close()
     if (child.exitCode === null) child.kill()
     await stopped
     await new Promise<void>(resolve => simulation.close(() => resolve()))
     await rm(scratch, { recursive: true, force: true })
-    await db.user.deleteMany({ where: { email: { in: [email, appleEmail, adminEmail] } } })
+    await db.user.deleteMany({ where: { email: { in: [email, appleEmail, adminEmail, consumerEmail] } } })
     await db.tenant.deleteMany({ where: { id: { in: tenantIds } } })
     await db.socialAttempt.deleteMany({})
     await db.socialProviderSettings.deleteMany({ where: { provider: { in: ['google', 'apple'] } } })

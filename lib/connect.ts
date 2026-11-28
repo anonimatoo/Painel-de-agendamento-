@@ -1,6 +1,7 @@
 import { db } from './db'
 import { settleOrderRefund } from './orders'
-import { settleAppointment, stripe } from './stripe'
+import { checkoutMethods, failedCheckout } from './checkout-method'
+import { recordAppointmentRefund, settleAppointment, stripe } from './stripe'
 import { AgendaError } from './agenda'
 import { createConnectAccount, createConnectOnboardingLink, readConnectStatus } from './connect-accounts'
 import { stripeClient, stripeConfiguration } from './stripe-settings'
@@ -62,8 +63,8 @@ export async function refundAppointment(tenantId: string, appointmentId: string)
     where: { id: appointmentId, tenantId, status: 'CONFIRMED', paidAt: { not: null } },
     include: { tenant: true }
   })
-  if (!item?.tenant.stripeAccountId || !item.checkoutId) throw new AgendaError('Esse atendimento não possui um pagamento passível de estorno.')
-  const account = item.tenant.stripeAccountId
+  const account = item?.checkoutAccountId ?? item?.tenant.stripeAccountId
+  if (!item || !account || !item.checkoutId) throw new AgendaError('Esse atendimento não possui um pagamento passível de estorno.')
   const api = await stripe()
   const session = await api.checkout.sessions.retrieve(item.checkoutId, { stripeAccount: account })
   const intent = typeof session.payment_intent === 'string' ? session.payment_intent : session.payment_intent?.id
@@ -72,7 +73,7 @@ export async function refundAppointment(tenantId: string, appointmentId: string)
     payment_intent: intent, refund_application_fee: item.platformFeeCents > 0 || undefined, metadata: { appointmentId }
   }, { stripeAccount: account, idempotencyKey: 'appointment-refund:' + appointmentId })
   if (refund.status === 'succeeded') {
-    await db.appointment.updateMany({ where: { id: appointmentId, tenantId, paidAt: { not: null } }, data: { refundedAt: new Date(), status: 'CANCELED' } })
+    await db.$transaction(tx => recordAppointmentRefund(tx, tenantId, appointmentId))
   } else if (refund.status !== 'pending' && refund.status !== 'requires_action') {
     throw new AgendaError('O estorno não foi aprovado. Consulte a situação na Stripe.')
   }
@@ -85,7 +86,7 @@ export async function openAppointmentCheckout(reservation: Appointment, api?: St
   if (reservation.checkoutId) return stripeApi.checkout.sessions.retrieve(reservation.checkoutId, { stripeAccount: account })
   if (reservation.checkoutState === 'REVIEW' || +reservation.expiresAt - Date.now() < 30 * 60_000) return
   const session = await stripeApi.checkout.sessions.create({
-    mode: 'payment', payment_method_types: ['card'],
+    mode: 'payment', ...checkoutMethods(reservation.checkoutMethod),
     line_items: [{ price_data: { currency: 'brl', unit_amount: reservation.chargeCents ?? reservation.cents, product_data: { name: 'Pagamento de atendimento' } }, quantity: 1 }],
     metadata: { appointmentId: reservation.id },
     payment_intent_data: reservation.platformFeeCents ? { application_fee_amount: reservation.platformFeeCents } : undefined,
@@ -93,9 +94,12 @@ export async function openAppointmentCheckout(reservation: Appointment, api?: St
     cancel_url: reservation.checkoutReturnUrl + '?pagamento=' + reservation.paymentToken,
     expires_at: +reservation.expiresAt / 1000
   }, { stripeAccount: account, idempotencyKey: 'appointment:' + reservation.id })
-  await db.appointment.updateMany({
-    where: { id: reservation.id, status: 'PENDING', OR: [{ checkoutId: null }, { checkoutId: session.id }] },
-    data: { checkoutId: session.id, checkoutState: 'OPEN' }
+  await db.$transaction(async tx => {
+    const opened = await tx.appointment.updateMany({
+      where: { id: reservation.id, tenantId: reservation.tenantId, status: 'PENDING', checkoutId: null },
+      data: { checkoutId: session.id, checkoutState: 'OPEN' }
+    })
+    if (opened.count) await tx.appointmentHistory.create({ data: { appointmentId: reservation.id, operation: 'PAYMENT_STARTED' } })
   })
   return session
 }
@@ -116,7 +120,8 @@ export async function reconcileAppointment(reservation: Appointment, account: st
   }
   if (session) {
     const evidence = session
-    await db.$transaction(tx => settleAppointment(tx, account, evidence, evidence.status === 'expired'))
+    const failed = await failedCheckout(evidence, reservation.checkoutMethod, api, account)
+    await db.$transaction(tx => settleAppointment(tx, account, evidence, failed))
   } else if (!reservation.expiresAt || +reservation.expiresAt <= Date.now()) {
     await db.appointment.updateMany({ where: { id: reservation.id, status: 'PENDING', checkoutId: null }, data: { checkoutState: 'REVIEW' } })
   }

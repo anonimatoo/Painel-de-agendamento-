@@ -60,7 +60,7 @@ export async function storeMedia(tenantId: string, kind: MediaKind, target: stri
     await tx.$queryRaw`SELECT id FROM "Tenant" WHERE id = ${tenantId} FOR UPDATE`
     const ownership = kind === 'PROFESSIONAL' ? await tx.professional.count({ where: { id: target, tenantId } })
       : kind === 'SERVICE' ? await tx.service.count({ where: { id: target, tenantId } })
-        : kind === 'PRODUCT' ? await tx.product.count({ where: { id: target, tenantId } }) : 1
+        : kind === 'PRODUCT' ? await tx.product.count({ where: { id: target.replace(/:[23]$/, ''), tenantId } }) : 1
     if (!ownership) throw new AgendaError('O item selecionado não está disponível.')
     const prior = await tx.mediaAsset.findUnique({ where: { tenantId_kind_target: dimensions } })
     const count = await tx.mediaAsset.count({ where: { tenantId } })

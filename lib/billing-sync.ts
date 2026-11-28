@@ -19,9 +19,20 @@ export async function updateSubscription(tx: Prisma.TransactionClient, tenantId:
   const plan = await tx.plan.findFirst({ where: { OR: [{ monthlyPriceId: { in: prices } }, { annualPriceId: { in: prices } }] } })
   if (plan) {
     await enqueueSubscriptionNotices(tx, tenantId, subscription, plan.name)
+    const items = subscription.items.data.filter(item => item.price.id === plan.monthlyPriceId || item.price.id === plan.annualPriceId)
+    const item = items.length === 1 ? items[0] : null
+    const interval = item?.price.recurring?.interval
+    const unit = item?.price.unit_amount
+    const recognized = item?.price.currency === 'brl' && item?.price.recurring?.interval_count === 1 &&
+      (interval === 'month' || interval === 'year') && unit != null
+    const update = {
+      status: subscription.status, planId: plan.id,
+      recurringCents: recognized ? unit * (item.quantity ?? 1) : null,
+      recurringInterval: recognized ? interval : null
+    }
     await tx.subscription.upsert({
-      where: { id: subscription.id }, update: { status: subscription.status, planId: plan.id },
-      create: { id: subscription.id, status: subscription.status, planId: plan.id, tenantId }
+      where: { id: subscription.id }, update,
+      create: { id: subscription.id, tenantId, ...update }
     })
   } else {
     await tx.subscription.updateMany({ where: { id: subscription.id, tenantId }, data: { status: 'unmapped_plan' } })

@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto'
 import { DateTime } from 'luxon'
-import { Prisma, Tenant } from '@prisma/client'
+import { Prisma, Tenant, type CheckoutMethod } from '@prisma/client'
 import { scheduleReturn } from './whatsapp-followup'
 import { calculateCommission, platformFee } from './commission'
+import { pixCheckoutLeadMinutes } from './checkout-method'
 import { db } from './db'
 
 export function dayBounds(day: string, zone: string) {
@@ -18,7 +19,7 @@ export async function availability(tenant: Tenant, serviceId: string, profession
   const now = DateTime.now()
   if (end <= now || start > now.plus({ days: 90 })) return []
   const assignment = await client.assignment.findFirst({
-    where: { tenantId: tenant.id, professionalId, serviceId, service: { active: true }, professional: { active: true } },
+    where: { tenantId: tenant.id, professionalId, serviceId, service: { active: true, archivedAt: null }, professional: { active: true } },
     include: { service: true, professional: { include: { hours: { where: { weekday: start.weekday } } } } }
   })
   if (!assignment) return []
@@ -46,14 +47,15 @@ export async function availability(tenant: Tenant, serviceId: string, profession
   return [...slots.values()].sort((a, b) => a.start.localeCompare(b.start))
 }
 
-export async function book(tenant: Tenant, data: { serviceId: string; professionalId: string; startsAt: string; name: string; phone: string; consent: boolean; online: boolean; checkoutReturnUrl?: string }) {
+export async function book(tenant: Tenant, data: { serviceId: string; professionalId: string; startsAt: string; name: string; phone: string; consent: boolean; online: boolean; checkoutMethod?: CheckoutMethod; consumerUserId?: string; checkoutReturnUrl?: string }) {
   const day = DateTime.fromISO(data.startsAt, { zone: tenant.timezone }).toISODate()
+  if (data.checkoutMethod === 'pix' && +new Date(data.startsAt) < Date.now() + pixCheckoutLeadMinutes * 60_000) throw new AgendaError('Escolha um horário com pelo menos 40 minutos de antecedência para pagar com Pix.')
   if (!day) throw new AgendaError('Selecione um horário válido.')
   return db.$transaction(async tx => {
     if (data.online) {
-      const [current] = await tx.$queryRaw<{ stripeAccountId: string | null; connectPausedAt: Date | null }[]>`
-        SELECT "stripeAccountId", "connectPausedAt" FROM "Tenant" WHERE id = ${tenant.id} FOR UPDATE`
-      if (!current || current.connectPausedAt || current.stripeAccountId !== tenant.stripeAccountId) throw new AgendaError('Os pagamentos online estão indisponíveis.')
+      const [current] = await tx.$queryRaw<{ stripeAccountId: string | null; connectPausedAt: Date | null; pixCheckoutEnabled: boolean }[]>`
+        SELECT "stripeAccountId", "connectPausedAt", "pixCheckoutEnabled" FROM "Tenant" WHERE id = ${tenant.id} FOR UPDATE`
+      if (!current || current.connectPausedAt || current.stripeAccountId !== tenant.stripeAccountId || (data.checkoutMethod === 'pix' && !current.pixCheckoutEnabled)) throw new AgendaError('Os pagamentos online estão indisponíveis.')
     }
     await lockProfessional(tx, tenant.id, data.professionalId)
     const slots = await availability(tenant, data.serviceId, data.professionalId, day, tx)
@@ -69,19 +71,20 @@ export async function book(tenant: Tenant, data: { serviceId: string; profession
     const chargeCents = data.online ? Math.ceil(service.cents * tenant.depositPercent / 100) : undefined
     const platformFeeCents = chargeCents ? await platformFee(tx, tenant.id, chargeCents) : 0
     const appointment = await tx.appointment.create({ data: {
-      tenantId: tenant.id, customerId: customer.id, professionalId: data.professionalId,
+      tenantId: tenant.id, customerId: customer.id, professionalId: data.professionalId, consumerUserId: data.consumerUserId,
       serviceId: data.serviceId, startsAt: slot.start, endsAt: slot.end, cents: service.cents,
       status: data.online ? 'PENDING' : 'CONFIRMED', consent: data.consent,
       checkoutReturnUrl: data.online ? data.checkoutReturnUrl : undefined,
       checkoutState: data.online ? 'CREATING' : undefined,
       checkoutAccountId: data.online ? tenant.stripeAccountId : undefined,
       paymentToken: data.online ? randomUUID() : undefined,
-      chargeCents, platformFeeCents,
+      chargeCents, platformFeeCents, checkoutMethod: data.checkoutMethod,
       expiresAt: data.online ? new Date(Math.floor(Date.now() / 1000) * 1000 + 35 * 60_000) : undefined
     } })
     await tx.appointmentHistory.create({ data: { appointmentId: appointment.id, operation: 'CREATED', newStart: appointment.startsAt } })
     await scheduleReminder(tx, tenant, appointment)
     await enqueueStatus(tx, tenant, appointment, data.online ? 'PAYMENT_PENDING' : 'CONFIRMED')
+    if (!data.online) await enqueueMerchantConfirmation(tx, tenant, appointment)
     return appointment
   })
 }
@@ -104,6 +107,17 @@ export async function scheduleReminder(tx: Prisma.TransactionClient, tenant: Ten
       where: { ...values, deliveryState: 'CANCELED', deliveryAttempts: 0 }, data: { deliveryState: 'QUEUED' }
     })
   }
+}
+
+export async function enqueueMerchantConfirmation(
+  tx: Prisma.TransactionClient, tenant: Pick<Tenant, 'merchantNoticePhone'>, appointment: { id: string; startsAt: Date }
+) {
+  if (!tenant.merchantNoticePhone) return
+  const dedupeKey = 'merchant-confirmed:' + appointment.id
+  await tx.reminder.upsert({ where: { dedupeKey }, update: {}, create: {
+    appointmentId: appointment.id, kind: 'MERCHANT_CONFIRMED', runAt: new Date(),
+    scheduledStart: appointment.startsAt, dedupeKey, recipientPhone: tenant.merchantNoticePhone
+  } })
 }
 
 export async function enqueueStatus(
@@ -141,10 +155,10 @@ export async function blockSchedule(tenantId: string, professionalId: string, st
   })
 }
 
-export async function rescheduleAppointment(tenant: Tenant, id: string, startsAt: Date, actorId: string) {
+export async function rescheduleAppointment(tenant: Tenant, id: string, startsAt: Date, actorId: string, consumer?: { userId: string; after: Date }) {
   return db.$transaction(async tx => {
     const result = await tx.appointment.findFirst({
-      where: { id, tenantId: tenant.id, status: 'CONFIRMED', startsAt: { gt: new Date() } }
+      where: { id, tenantId: tenant.id, consumerUserId: consumer?.userId, status: 'CONFIRMED', startsAt: { gt: consumer?.after ?? new Date() } }
     })
     if (!result) throw new AgendaError('Este atendimento não pode ser reagendado.')
     await lockProfessional(tx, tenant.id, result.professionalId)
@@ -156,7 +170,7 @@ export async function rescheduleAppointment(tenant: Tenant, id: string, startsAt
     const endsAt = new Date(+startsAt + (+result.endsAt - +result.startsAt))
     if (endsAt.toISOString() !== slot.end) throw new AgendaError('A duração do serviço mudou. Crie uma nova reserva ou entre em contato com o suporte.')
     const updated = await tx.appointment.updateMany({
-      where: { id, tenantId: tenant.id, status: 'CONFIRMED', startsAt: result.startsAt },
+      where: { id, tenantId: tenant.id, status: 'CONFIRMED', startsAt: { equals: result.startsAt, gt: consumer?.after }, consumerUserId: consumer?.userId },
       data: { startsAt, endsAt }
     })
     if (!updated.count) throw new AgendaError('O atendimento já foi alterado. Atualize a página.')
@@ -171,10 +185,10 @@ export async function rescheduleAppointment(tenant: Tenant, id: string, startsAt
   })
 }
 
-export async function closeAppointment(tenantId: string, id: string, status: 'COMPLETED' | 'CANCELED' | 'NO_SHOW', actorId: string) {
+export async function closeAppointment(tenantId: string, id: string, status: 'COMPLETED' | 'CANCELED' | 'NO_SHOW', actorId: string, consumer?: { userId: string; after: Date }) {
   await db.$transaction(async tx => {
     const updated = await tx.appointment.updateMany({
-      where: { id, tenantId, status: 'CONFIRMED', ...(status === 'CANCELED' ? { paidAt: null } : { startsAt: { lte: new Date() } }) },
+      where: { id, tenantId, status: 'CONFIRMED', consumerUserId: consumer?.userId, ...(status === 'CANCELED' ? { paidAt: null, startsAt: consumer ? { gt: consumer.after } : undefined } : { startsAt: { lte: new Date() } }) },
       data: { status }
     })
     if (!updated.count) throw new AgendaError('Não foi possível atualizar esse atendimento.')

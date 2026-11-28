@@ -1,28 +1,39 @@
+import Link from 'next/link'
+import { CalendarCheck, CalendarDays, CircleCheck, CreditCard, MapPin, ShoppingBag, Store, UserRound } from 'lucide-react'
 import { randomUUID } from 'node:crypto'
 import { notFound, redirect } from 'next/navigation'
 import { DateTime } from 'luxon'
+import { membership, userSession } from '@/lib/auth'
+import { can } from '@/lib/permissions'
+import { featuredFirst, readPublicDesign } from '@/lib/public-design'
+import { connectStatus } from '@/lib/connect'
+import { stripeForNewPayments } from '@/lib/stripe-settings'
+import { pixMinimumCents } from '@/lib/checkout-method'
+import { currentConsumer, consumerPath } from '@/lib/consumer'
 import { db } from '@/lib/db'
 import { AgendaError, availability } from '@/lib/agenda'
 import { SlotPicker } from './slot-picker'
 import { joinWaitlist, reserve, retryPayment, shopCheckout } from '../../actions'
-import { Brand, ErrorNote, Field, brl } from '../../ui'
+import { FormSubmit } from '../../form-submit'
+import { PublicBrand } from '../../public-brand'
+import { ErrorNote, Field, brl } from '../../ui'
 
 export const dynamic = 'force-dynamic'
 
 export default async function Establishment({ params, searchParams }: {
   params: Promise<{ slug: string }>
-  searchParams: Promise<{ servico?: string; profissional?: string; dia?: string; erro?: string; reserva?: string; espera?: string; pedido?: string; pagamento?: string }>
+  searchParams: Promise<{ servico?: string; profissional?: string; dia?: string; erro?: string; reserva?: string; espera?: string; pedido?: string; pagamento?: string; previa?: string }>
 }) {
   const { slug } = await params
   const query = await searchParams
   const tenant = await db.tenant.findFirst({
     where: { slug, active: true, suspended: false },
     include: {
-      services: { where: { active: true, assignments: { some: { professional: { active: true } } } }, include: {
+      services: { where: { active: true, archivedAt: null, assignments: { some: { professional: { active: true } } } }, include: {
         assignments: { where: { professional: { active: true } }, include: { professional: true } }
       } },
       media: true,
-      products: { where: { stock: { gt: 0 } } }
+      products: { where: { published: true, archivedAt: null, stock: { gt: 0 } } }
     }
   })
   if (!tenant) {
@@ -32,6 +43,17 @@ export default async function Establishment({ params, searchParams }: {
     for (const [key, value] of Object.entries(query)) if (typeof value === 'string' && value.length <= 500) preserved.set(key, value)
     redirect('/estabelecimento/' + encodeURIComponent(alias.tenant.slug) + (preserved.size ? '?' + preserved : ''))
   }
+  const preview = query.previa === '1' ? await userSession() : null
+  const member = preview ? await membership(preview.id) : null
+  const draft = member?.tenantId === tenant.id && can(member, 'brand.manage') && tenant.publicDesignDraft !== null
+  const design = readPublicDesign(draft ? tenant.publicDesignDraft : tenant.publicDesign)
+  const visibleProducts = featuredFirst(tenant.products, design.productIds)
+  const visibleServices = featuredFirst(tenant.services, design.serviceIds)
+  const hours = await db.workHours.findMany({ where: { tenantId: tenant.id, professional: { active: true } },
+    select: { weekday: true, startMinute: true, endMinute: true }, distinct: ['weekday', 'startMinute', 'endMinute'],
+    orderBy: [{ weekday: 'asc' }, { startMinute: 'asc' }], take: 21 })
+  const clock = (value: number) => String(Math.floor(value / 60)).padStart(2, '0') + ':' + String(value % 60).padStart(2, '0')
+  const weekdays = ['Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb', 'Dom']
   const image = (kind: string, target = '') => tenant.media.find(item => item.kind === kind && item.target === target)?.key
   const cover = image('COVER') ?? tenant.coverKey
   const banner = image('BANNER')
@@ -43,14 +65,16 @@ export default async function Establishment({ params, searchParams }: {
     : 0
   const paymentToken = typeof query.pagamento === 'string' && /^[a-f0-9-]{36}$/.test(query.pagamento) ? query.pagamento : undefined
   const payment = paymentToken ? await db.appointment.findFirst({
-    where: { tenantId: tenant.id, paymentToken }, select: { status: true, checkoutState: true, expiresAt: true }
+    where: { tenantId: tenant.id, paymentToken }, select: { id: true, status: true, checkoutState: true, expiresAt: true, startsAt: true, chargeCents: true, consumerUserId: true, paymentIntentId: true, paidAt: true, refundedAt: true, service: { select: { name: true } }, professional: { select: { name: true } } }
   }) : null
   const order = typeof query.pedido === 'string' && query.pedido.length < 100
     ? await db.shopOrder.findFirst({ where: { id: query.pedido, tenantId: tenant.id }, select: { status: true, paymentReview: true } }) : null
   const purchasable = !tenant.connectPausedAt && tenant.stripeAccountId && tenant.products.some(product => (product.promotionCents ?? product.cents) > 0)
   const today = DateTime.now().setZone(tenant.timezone).toISODate()!
-  const day = query.dia ?? today
-  const chosen = tenant.services.find(s => s.id === query.servico) ?? tenant.services[0]
+  const day = typeof query.dia === 'string' ? query.dia : today
+  const consumer = await currentConsumer(tenant.id)
+  const portal = consumerPath(slug)
+  const chosen = visibleServices.find(s => s.id === query.servico) ?? visibleServices[0]
   const professional = chosen?.assignments.find(a => a.professionalId === query.profissional)?.professional
   let slots: Awaited<ReturnType<typeof availability>> = []
   let dateError: string | undefined
@@ -62,34 +86,71 @@ export default async function Establishment({ params, searchParams }: {
       dateError = error.message
     }
   }
-  return <div className="site" style={{ '--accent': tenant.color } as React.CSSProperties}>
-    <header><Brand /></header><main className="content booking">
-      <section className={'public-title ' + (tenant.theme === 'dark' ? 'dark-profile' : '')}>
-        {banner && <img className="cover" src={'/api/imagens/' + banner} alt="" />}
-        {cover && <img className="cover" src={'/api/imagens/' + cover} alt="" />}
-        {logo && <img width={64} height={64} className="profile-logo" src={'/api/imagens/' + logo} alt="" />}
-        {profile && <img width={96} height={96} className="profile-logo" src={'/api/imagens/' + profile} alt={'Foto de ' + tenant.name} />}
-        <h1>{tenant.name}</h1><p>{tenant.description}</p>{tenant.address && <p>{tenant.address}</p>}
-        <nav className="inline" aria-label="Contato">
-          {tenant.instagramUrl && <a href={tenant.instagramUrl} rel="noreferrer">Instagram</a>}
-          {tenant.contactPhone && <a href={'https://wa.me/' + tenant.contactPhone} rel="noreferrer">WhatsApp</a>}
-        </nav>
+  const picture = banner ?? cover
+  const online = Boolean(chosen && tenant.onlinePayment && chosen.cents > 0)
+  const checkoutAccount = tenant.stripeAccountId
+  const methods = checkoutAccount && tenant.pixCheckoutEnabled && !tenant.connectPausedAt
+    ? await stripeForNewPayments().then(api => connectStatus(checkoutAccount, api)).catch(() => null) : null
+  const pix = Boolean(methods?.pix)
+  const pixForService = pix && chosen && Math.ceil(chosen.cents * tenant.depositPercent / 100) >= pixMinimumCents
+  const completed = Boolean(payment?.paidAt && !payment.refundedAt)
+  const checkoutPhoto = chosen ? image('SERVICE', chosen.id) : null
+  const steps = ['Serviço', 'Profissional', 'Data', 'Horário', 'Revisão', 'Pagamento', 'Confirmação']
+  const stage = completed || confirmed ? 6 : payment ? 5 : slots.length ? 3 : professional ? 2 : 0
+  const productsSection = tenant.products.length > 0 && <article id="produtos"><h2>Produtos disponíveis</h2>
+        <ul className="storefront-products">{visibleProducts.map(product => <li key={product.id}>
+          {image('PRODUCT', product.id) && <img className="catalog-photo" src={'/api/imagens/' + image('PRODUCT', product.id)} alt="" />}
+          <div><strong>{product.name}</strong>{design.productIds.includes(product.id) && <span className="state-pill">Em destaque</span>}<p>{product.description}</p>{brl(product.promotionCents ?? product.cents)}</div>
+        </li>)}</ul>
+        {purchasable && <details><summary>Montar pedido para retirada</summary><form action={shopCheckout.bind(null, slug)}>
+          <input type="hidden" name="requestId" value={randomUUID()} />
+          {visibleProducts.filter(product => (product.promotionCents ?? product.cents) > 0).map(product =>
+            <Field key={product.id} label={'Unidades de ' + product.name} name={'product:' + product.id} type="number" min={0} max={Math.min(product.stock, 100)} value={0} />
+          )}
+          <Field label="Nome" name="name" value={consumer?.name} /><Field label="Telefone com DDI para retirada" name="phone" type="tel" value={consumer?.phone} />{pix && <label>Forma de pagamento<select name="checkoutMethod" defaultValue={methods?.payments ? 'card' : 'pix'}>
+            {methods?.payments && <option value="card">Cartão de crédito</option>}<option value="pix">Pix</option>
+          </select></label>}<FormSubmit>Ir para pagamento</FormSubmit>
+        </form></details>}
+      </article>
+  return <div className="consumer-site storefront" style={{ '--brand-accent': tenant.color, '--brand-secondary': design.secondaryColor,
+      '--storefront-radius': design.buttonStyle === 'pill' ? '999px' : '10px' } as React.CSSProperties}>
+    <header className="consumer-header"><PublicBrand /><Link className="button outline" href={portal}><UserRound size={18} aria-hidden /> {consumer ? 'Minha conta' : 'Entrar como cliente'}</Link></header>
+    <main className="content">
+      <section className={'storefront-hero ' + (tenant.theme === 'dark' ? 'storefront-dark' : '')}>
+        {picture && <img className="storefront-cover" src={'/api/imagens/' + picture} alt="" />}
+        {(logo || profile) && <img width={94} height={94} className="storefront-logo" src={'/api/imagens/' + (logo ?? profile)} alt="" />}
+        <div><h1>{tenant.name}</h1>{tenant.description && <p>{tenant.description}</p>}
+          <nav className="inline" aria-label="Redes sociais e contato">
+            {tenant.instagramUrl && <a href={tenant.instagramUrl} rel="noreferrer">Instagram</a>}
+            {tenant.contactPhone && <a href={'https://wa.me/' + tenant.contactPhone} rel="noreferrer">WhatsApp</a>}
+          </nav>
+        </div>
       </section>
+      <nav className="consumer-nav" aria-label="Página do estabelecimento">
+        <a href="#agendar"><CalendarDays size={18} aria-hidden /> Agendar</a>
+        {tenant.products.length > 0 && <a href="#produtos"><ShoppingBag size={18} aria-hidden /> Comprar produtos</a>}
+        <Link href={portal + '#agendamentos'}><CalendarCheck size={18} aria-hidden /> Meus agendamentos</Link>
+        <Link href={portal + '#pedidos'}>Meus pedidos</Link><Link href={portal + '#meus-dados'}>Meus dados</Link>
+      </nav>
+      {draft && <p className="success" role="status">Prévia do rascunho. <Link href="/personalizacao">Voltar ao editor</Link></p>}
       <ErrorNote error={query.erro ?? dateError} />
-      {payment && <article><h2>Situação do pagamento</h2>
-        <p role="status">{payment.status === 'CONFIRMED' ? 'Pagamento confirmado. Seu horário está reservado.' : payment.checkoutState === 'REVIEW' ? 'Pagamento em verificação. Entre em contato com o estabelecimento antes de pagar novamente.' : payment.status === 'CANCELED' ? 'O prazo para pagamento terminou.' : 'Aguardamos a confirmação do pagamento.'}</p>
+      {payment && <article className="booking-result"><h2><CircleCheck aria-hidden /> {completed ? 'Pagamento aprovado' : 'Situação do pagamento'}</h2>
+        {completed && <><p role="status">Seu agendamento foi confirmado.</p><dl><dt>Número do agendamento</dt><dd>{payment.id}</dd><dt>Serviço</dt><dd>{payment.service.name}</dd><dt>Profissional</dt><dd>{payment.professional.name}</dd><dt>Data e horário</dt><dd>{DateTime.fromJSDate(payment.startsAt).setZone(tenant.timezone).toFormat('dd/LL/yyyy HH:mm')}</dd><dt>Valor pago</dt><dd>{brl(payment.chargeCents ?? 0)}</dd></dl>
+          <div className="inline"><Link className="button" href={portal + '#agendamentos'}>Ver meus agendamentos</Link>{consumer?.userId && payment.consumerUserId === consumer.userId && payment.paymentIntentId && <Link href={portal + '/comprovante?tipo=agendamento&id=' + payment.id}>Comprovante Stripe</Link>}<Link href={'/estabelecimento/' + encodeURIComponent(slug)}>Voltar ao estabelecimento</Link></div></>}
+        {!completed && <p role="status">{payment.refundedAt ? 'O pagamento foi estornado.' : payment.checkoutState === 'REVIEW' ? 'Pagamento em verificação. Entre em contato com o estabelecimento antes de pagar novamente.' : payment.status === 'CANCELED' ? 'O prazo para pagamento terminou.' : 'Aguardamos a confirmação do pagamento.'}</p>}
         {paymentToken && payment.status === 'PENDING' && payment.checkoutState !== 'REVIEW' && payment.expiresAt && payment.expiresAt > new Date() &&
           <form action={retryPayment.bind(null, slug, paymentToken)}><button>Continuar pagamento</button></form>}
       </article>}
       {order && <p className="success" role="status">{order.paymentReview ? 'O pagamento está em verificação. Consulte o estabelecimento antes de pagar novamente.' : order.status === 'PAID' ? 'Pagamento do pedido confirmado. Combine a retirada com o estabelecimento.' : order.status === 'PENDING' ? 'Aguardando confirmação do pagamento do pedido.' : 'Este pedido foi cancelado ou estornado.'}</p>}
       {query.espera && <p className="success" role="status">Solicitação de lista de espera enviada.</p>}
       {confirmed > 0 && <p className="success" role="status">Seu agendamento foi confirmado.</p>}
-      {query.reserva === 'pagamento' && <p className="success" role="status">Seu agendamento será confirmado após a validação do pagamento.</p>}
-      <article><h2>Agendar atendimento</h2>
+      {design.layout === 'products' && productsSection}
+      <div className="storefront-grid"><article id="agendar"><h2>Agende seu atendimento</h2>
+        <ol className="booking-progress" aria-label="Etapas do agendamento">{steps.map((name, i) => <li key={name} aria-current={i === stage ? 'step' : undefined}><span>{i + 1}</span>{name}</li>)}</ol>
         {chosen ? <SlotPicker chosenId={chosen.id} professionalId={professional?.id ?? ''} day={day} today={today}
-          services={tenant.services.map(s => ({
-            id: s.id, label: s.name + ' · ' + brl(s.cents) + ' · ' + s.duration + ' min',
-            professionals: s.assignments.map(a => ({ id: a.professionalId, name: a.professional.name }))
+          services={visibleServices.map(s => ({
+            id: s.id, name: s.name, price: brl(s.cents), duration: s.duration,
+            professionals: s.assignments.map(a => ({ id: a.professionalId, name: a.professional.name, photo: image('PROFESSIONAL', a.professionalId) ? '/api/imagens/' + image('PROFESSIONAL', a.professionalId) : undefined }))
           }))} /> : <p>O estabelecimento ainda não abriu a agenda.</p>}
         {professional && chosen && !slots.length && !dateError && <>
           <p>Nenhum horário disponível nesta data.</p>
@@ -99,14 +160,37 @@ export default async function Establishment({ params, searchParams }: {
             <Field label="Telefone com DDI para contato" name="phone" type="tel" /><button>Enviar solicitação</button>
           </form></details>
         </>}
-        {!!slots.length && <form action={reserve.bind(null, slug)}>
+        {!!slots.length && <form action={reserve.bind(null, slug)} className="booking-review">
           <input type="hidden" name="serviceId" value={chosen.id} /><input type="hidden" name="professionalId" value={professional!.id} />
-          <label>Horário<select name="startsAt" required>{slots.map(s => <option key={s.start} value={s.start}>{s.label}</option>)}</select></label>
-          <Field label="Nome" name="name" /><Field label="WhatsApp com DDI (ex. 5511999999999)" name="phone" type="tel" />
-          <label className="check"><input type="checkbox" name="consent" /> Quero receber lembretes e atualizações deste atendimento pelo WhatsApp.</label>
-          <button>{tenant.onlinePayment && chosen.cents > 0 ? 'Continuar para pagamento' : 'Confirmar agendamento'}</button>
+          <fieldset className="booking-times"><legend>Horários disponíveis</legend>
+            <div>{slots.map(slot => <label key={slot.start}><input type="radio" name="startsAt" required value={slot.start} /><span>{slot.label}</span></label>)}</div>
+          </fieldset>
+          <div className="booking-review-columns">
+            <section><h3>Resumo da contratação</h3>
+              {checkoutPhoto && <img className="catalog-photo" src={'/api/imagens/' + checkoutPhoto} alt="" />}
+              <strong>{chosen.name}</strong><p>{chosen.description}</p>
+              <dl><dt>Profissional</dt><dd>{professional!.name}</dd><dt>Data</dt><dd>{DateTime.fromISO(day).toFormat('dd/LL/yyyy')}</dd><dt>Duração</dt><dd>{chosen.duration} min</dd><dt>Total</dt><dd>{brl(chosen.cents)}</dd></dl>
+              <p className="booking-payment">{online ? <><CreditCard aria-hidden size={20} /> {pixForService ? 'Stripe Checkout' : 'Cartão no Stripe Checkout'} · {brl(Math.ceil(chosen.cents * tenant.depositPercent / 100))} agora</> : <><Store aria-hidden size={20} /> {chosen.cents > 0 ? 'Pagamento no estabelecimento' : 'Sem cobrança'}</>}</p>
+              {tenant.policies && <details><summary>Política de cancelamento</summary><p className="preserve-lines">{tenant.policies}</p></details>}
+            </section>
+            <section><h3>Seus dados</h3>
+              <Field label="Nome" name="name" value={consumer?.name} /><Field label="WhatsApp com DDI (ex. 5511999999999)" name="phone" type="tel" value={consumer?.phone} />
+              <label className="check"><input type="checkbox" name="consent" /> Quero receber lembretes e atualizações deste atendimento pelo WhatsApp.</label>
+              {online && pixForService && <label>Forma de pagamento<select name="checkoutMethod" defaultValue={methods?.payments ? 'card' : 'pix'}>
+                {methods?.payments && <option value="card">Cartão de crédito</option>}<option value="pix">Pix</option>
+              </select></label>}
+              <FormSubmit pendingText="Reservando horário…">{online ? 'Continuar para pagamento' : 'Confirmar agendamento'}</FormSubmit>
+            </section>
+          </div>
         </form>}
       </article>
+      <aside aria-label="Sobre o estabelecimento"><article><h2><Store aria-hidden size={21} /> Sobre {tenant.name}</h2>
+        {tenant.description && <p>{tenant.description}</p>}
+        {tenant.address && <p><MapPin size={18} aria-hidden /> {tenant.address}</p>}
+        {tenant.contactPhone && <p><a href={'https://wa.me/' + tenant.contactPhone}>Conversar pelo WhatsApp</a></p>}
+        {hours.length > 0 && <details><summary>Horários de atendimento</summary><ul>{hours.map(row => <li key={[row.weekday, row.startMinute, row.endMinute].join(':')}>{weekdays[row.weekday - 1]} · {clock(row.startMinute)}–{clock(row.endMinute)}</li>)}</ul></details>}
+        {(cover || gallery[0]) && <img className="cover" src={'/api/imagens/' + (cover ?? gallery[0].key)} alt={'Espaço de ' + tenant.name} />}
+      </article></aside></div>
       {chosen && (image('SERVICE', chosen.id) || professional && image('PROFESSIONAL', professional.id)) && <article><h2>Serviço e profissional</h2>
         <div className="grid">
           {image('SERVICE', chosen.id) && <figure><img className="cover" src={'/api/imagens/' + image('SERVICE', chosen.id)} alt="" /><figcaption>{chosen.name}</figcaption></figure>}
@@ -115,19 +199,7 @@ export default async function Establishment({ params, searchParams }: {
       </article>}
       {gallery.length > 0 && <article><h2>Galeria</h2><div className="grid">{gallery.map(item => <img key={item.key} className="cover" src={'/api/imagens/' + item.key} alt={'Foto de ' + tenant.name} />)}</div></article>}
       {tenant.policies && <article><h2>Políticas de atendimento</h2><p className="preserve-lines">{tenant.policies}</p></article>}
-      {tenant.products.length > 0 && <article><h2>Produtos disponíveis</h2>
-        <ul>{tenant.products.map(product => <li key={product.id}>
-          {image('PRODUCT', product.id) && <img className="catalog-photo" src={'/api/imagens/' + image('PRODUCT', product.id)} alt="" />}
-          {product.name} · {brl(product.promotionCents ?? product.cents)}
-        </li>)}</ul>
-        {purchasable && <details><summary>Montar pedido para retirada</summary><form action={shopCheckout.bind(null, slug)}>
-          <input type="hidden" name="requestId" value={randomUUID()} />
-          {tenant.products.filter(product => (product.promotionCents ?? product.cents) > 0).map(product =>
-            <Field key={product.id} label={'Unidades de ' + product.name} name={'product:' + product.id} type="number" min={0} max={Math.min(product.stock, 100)} value={0} />
-          )}
-          <Field label="Nome" name="name" /><Field label="Telefone com DDI para retirada" name="phone" type="tel" /><button>Ir para pagamento</button>
-        </form></details>}
-      </article>}
+      {design.layout === 'booking' && productsSection}
     </main>
   </div>
 }

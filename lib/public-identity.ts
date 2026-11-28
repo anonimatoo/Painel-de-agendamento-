@@ -1,6 +1,8 @@
 import type { Prisma } from '@prisma/client'
 import { db } from './db'
 import { AgendaError } from './agenda'
+import { publicSlugBase } from './public-slug'
+export { publicSlug } from './public-slug'
 
 export async function lockPublicAddress(tx: Prisma.TransactionClient, slug: string) {
   await tx.$queryRaw`SELECT 1 AS locked FROM (SELECT pg_advisory_xact_lock(hashtext(${'public-slug:' + slug}))) AS lock`
@@ -21,14 +23,8 @@ export async function changePublicAddress(tenantId: string, slug: string) {
   })
 }
 
-export function publicSlug(name: string) {
-  return name.normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60).replace(/-+$/, '')
-}
-
 export async function allocatePublicSlug(tx: Prisma.TransactionClient, name: string) {
-  const normalized = publicSlug(name)
-  const base = normalized.length >= 3 ? normalized : normalized ? 'agenda-' + normalized : 'agenda'
+  const base = publicSlugBase(name)
   // Existing address changes and new registrations share the same transaction lock.
   for (let attempt = 1; attempt <= 64; attempt++) {
     const suffix = attempt === 1 ? '' : '-' + attempt

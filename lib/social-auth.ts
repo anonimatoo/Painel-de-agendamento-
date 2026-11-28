@@ -8,21 +8,21 @@ import { signupEmail } from './registration'
 const life = 10 * 60_000
 const signupCookie = 'agenda_social_signup'
 type LinkSession = { userId: string; tokenHash: string }
-type Attempt = { nonce: string; verifier: string; revision: string; link?: LinkSession }
-export type SocialSignup = { provider: SocialProvider; subject: string; email: string; emailVerified: boolean; revision: string; expires: number }
+type Attempt = { nonce: string; verifier: string; revision: string; link?: LinkSession; consumerSlug?: string }
+export type SocialSignup = { provider: SocialProvider; subject: string; email: string; emailVerified: boolean; revision: string; expires: number; consumerSlug?: string }
 
 export async function enabledSocialProviders() {
   const rows = await db.socialProviderSettings.findMany({ where: { enabled: true }, select: { provider: true } })
   return socialProviders.filter(provider => rows.some(row => row.provider === provider))
 }
 
-export async function beginSocial(provider: SocialProvider, link?: LinkSession) {
+export async function beginSocial(provider: SocialProvider, link?: LinkSession, consumerSlug?: string) {
   const row = await db.socialProviderSettings.findUnique({ where: { provider } })
   if (!row?.enabled) return null
   const config = JSON.parse(unseal(row.encrypted, 'social:' + provider)) as ProviderCredentials
   const state = randomToken()
   const browser = randomToken()
-  const attempt: Attempt = { nonce: randomToken(), verifier: provider === 'google' ? randomToken() : '', revision: row.revision, link }
+  const attempt: Attempt = { nonce: randomToken(), verifier: provider === 'google' ? randomToken() : '', revision: row.revision, link, consumerSlug }
   const url = authorizationUrl(provider, config.clientId, state, attempt.nonce, attempt.verifier)
   const secure = process.env.APP_URL?.startsWith('https://') ?? false
   if (provider === 'apple' && !secure) return null
@@ -95,13 +95,13 @@ export async function finishSocial(provider: SocialProvider, state: string, code
   if (!row?.enabled || row.revision !== attempt.revision) return null
   const claims = await exchangeSocialCode(provider, JSON.parse(unseal(row.encrypted, 'social:' + provider)), code, attempt.verifier, attempt.nonce)
   const result = await resolveSocialIdentity(provider, claims, attempt.link, row.revision)
-  if (result?.kind !== 'register') return result
+  if (result?.kind !== 'register') return result ? { ...result, consumerSlug: attempt.consumerSlug } : null
   const signup: SocialSignup = { provider, subject: claims.subject, revision: row.revision, email: result.email,
-    emailVerified: result.emailVerified, expires: Date.now() + life }
+    emailVerified: result.emailVerified, consumerSlug: attempt.consumerSlug, expires: Date.now() + life }
   jar.set(signupCookie, seal(JSON.stringify(signup), signupCookie), {
     path: '/', httpOnly: true, secure: process.env.APP_URL?.startsWith('https://') ?? false, sameSite: 'lax', expires: new Date(signup.expires)
   })
-  return { kind: 'signup' as const }
+  return { kind: 'signup' as const, consumerSlug: attempt.consumerSlug }
 }
 
 export async function pendingSocialSignup() {

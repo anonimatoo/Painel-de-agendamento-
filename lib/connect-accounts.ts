@@ -90,6 +90,8 @@ export async function readConnectStatus(api: ConnectProvider, accountId: string)
   const requirements = account.requirements?.summary?.minimum_deadline?.status
   return {
     payments: !account.closed && cardPayments === 'active' && snapshot.charges_enabled,
+    pix: !account.closed && account.applied_configurations.includes('merchant') &&
+      snapshot.country === 'BR' && snapshot.charges_enabled && snapshot.capabilities?.pix_payments === 'active',
     payouts: !account.closed && snapshot.payouts_enabled,
     submitted: !account.closed && snapshot.details_submitted,
     requirements,

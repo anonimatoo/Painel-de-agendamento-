@@ -1,16 +1,17 @@
 import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { pendingSocialSignup } from '@/lib/social-auth'
-import { Brand } from '../../ui'
+import { AuthShell } from '../../auth-shell'
 import { RegisterForm } from '../register-form'
+import styles from '../../public-experience.module.css'
 
 export default async function SocialRegister() {
   const pending = await pendingSocialSignup()
-  if (!pending) redirect('/login?social=erro')
-  return <div className="site"><header><Brand /></header><main className="center auth-center"><article>
+  if (!pending || pending.consumerSlug) redirect('/login?social=erro')
+  return <AuthShell mode="register">
     <h1>Seu estabelecimento</h1>
     <p>Informe o nome do seu negócio para preparar a agenda.</p>
     <RegisterForm verifiedEmail={pending.email} />
-    <p><Link href="/login">Voltar para entrar</Link></p>
-  </article></main></div>
+    <Link className={styles.authReset} href="/login">Voltar para entrar</Link>
+  </AuthShell>
 }

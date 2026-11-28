@@ -23,7 +23,8 @@ async function submit(path: string, label: string, values: Record<string, string
   assert.equal(page.status, 200, path)
   const html = await page.text()
   const forms = [...html.matchAll(/<form\b[^>]*>[\s\S]*?<\/form>/g)]
-  const selected = forms.find(([form]) => form.includes('>' + label + '</button>'))
+  const selected = forms.find(([form]) => [...form.matchAll(/<button\b[^>]*>([\s\S]*?)<\/button>/g)]
+    .some(([, body]) => decode(body.replace(/<svg\b[\s\S]*?<\/svg>/g, '').replace(/<!--[\s\S]*?-->/g, '')).trim() === label))
   assert.ok(selected, 'Formulário: ' + label)
   const body = new FormData()
   for (const [input] of selected[0].matchAll(/<input\b[^>]*>/g)) {

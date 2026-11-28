@@ -1,4 +1,6 @@
 import Link from 'next/link'
+import { Activity, CreditCard, Store, UsersRound } from 'lucide-react'
+import { DateTime } from 'luxon'
 import { redirect } from 'next/navigation'
 import { db } from '@/lib/db'
 import { userSession } from '@/lib/auth'
@@ -15,6 +17,21 @@ export default async function SuperAdmin({ searchParams }: { searchParams: Promi
   if (!user.adminMfaVerified) redirect(user.mfaSecret ? '/login' : '/conta')
   const query = await searchParams
   const date = (value: Date) => new Intl.DateTimeFormat('pt-BR', { timeZone: 'America/Sao_Paulo', dateStyle: 'short', timeStyle: 'short' }).format(value)
+  const month = DateTime.now().setZone('America/Sao_Paulo').startOf('month').toJSDate()
+  const [establishments, active, delinquent, canceled, newTenants, billed, recurring, approvedAppointments, approvedOrders, refundedAppointments, refundedOrders] = await Promise.all([
+    db.tenant.count(),
+    db.tenant.count({ where: { suspended: false, subscriptions: { some: { status: { in: ['active', 'trialing'] } } } } }),
+    db.tenant.count({ where: { subscriptions: { some: { status: { in: ['past_due', 'unpaid'] } } } } }),
+    db.subscription.count({ where: { status: 'canceled' } }),
+    db.tenant.count({ where: { createdAt: { gte: month } } }),
+    db.billingInvoice.aggregate({ where: { status: 'paid', currency: 'brl', issuedAt: { gte: month } }, _sum: { amountPaid: true } }),
+    db.subscription.groupBy({ by: ['recurringInterval'], where: { status: 'active' }, _sum: { recurringCents: true }, _count: true }),
+    db.appointment.aggregate({ where: { paidAt: { gte: month } }, _sum: { platformFeeCents: true }, _count: true }),
+    db.shopOrder.aggregate({ where: { paidAt: { gte: month } }, _sum: { platformFeeCents: true }, _count: true }),
+    db.appointment.aggregate({ where: { refundedAt: { gte: month } }, _sum: { platformFeeCents: true }, _count: true }),
+    db.shopOrder.aggregate({ where: { refundedAt: { gte: month } }, _sum: { platformFeeCents: true }, _count: true })
+
+  ])
   const [tenants, plans, stripeSettings, billingEvent, connectEvent, changes, providerSettings] = await Promise.all([
     db.tenant.findMany({ orderBy: { createdAt: 'desc' }, take: 100, include: { subscriptions: { include: { plan: true } } } }),
     db.plan.findMany({ orderBy: { monthlyCents: 'asc' } }),
@@ -24,8 +41,22 @@ export default async function SuperAdmin({ searchParams }: { searchParams: Promi
     db.adminAudit.findMany({ where: { action: { startsWith: 'STRIPE_' } }, orderBy: { createdAt: 'desc' }, take: 15, select: { action: true, createdAt: true } }),
     db.socialProviderSettings.findMany({ select: { provider: true, enabled: true } })
   ])
+  const monthly = recurring.find(row => row.recurringInterval === 'month')?._sum.recurringCents ?? 0
+  const annual = recurring.find(row => row.recurringInterval === 'year')?._sum.recurringCents ?? 0
+  const unsynced = recurring.find(row => row.recurringInterval === null)?._count ?? 0
+  const fees = [approvedAppointments, approvedOrders, refundedAppointments, refundedOrders].map(row => row._sum.platformFeeCents ?? 0)
   return <div className="shell"><aside><Brand /><nav><Link href="/super-admin">Administração</Link><a href="#assinantes">Assinantes</a><a href="#planos">Planos</a><Link href="/conciliacao">Movimentações Stripe</Link><Link href="/comunicacao">Comunicação</Link><Link href="/diagnostico">Diagnóstico</Link><Link href="/conta">Minha conta</Link></nav><form action={logout}><button className="subtle">Sair</button></form></aside>
-    <main className="content"><h1>Administração da plataforma</h1><ErrorNote error={query.erro} />
+    <main className="content platform-console"><section className="workspace-heading"><div><h1>Administração da plataforma</h1><p>Acompanhe assinantes, planos e integrações.</p></div><Link className="button outline" href="/diagnostico"><Activity size={19} aria-hidden /> Diagnóstico</Link></section>
+      <section className="commercial-kpis">
+        <article><Store aria-hidden /><p>Estabelecimentos</p><strong>{establishments}</strong><small>{newTenants} cadastrados neste mês</small></article>
+        <article><UsersRound aria-hidden /><p>Assinantes ativos ou em teste</p><strong>{active}</strong><small>{delinquent} com inadimplência</small></article>
+        <article><Activity aria-hidden /><p>Assinaturas canceladas</p><strong>{canceled}</strong></article>
+        <article><CreditCard aria-hidden /><p>Faturas pagas emitidas no mês</p><strong>{brl(billed._sum.amountPaid ?? 0)}</strong><small>Stripe Billing da plataforma</small></article>
+      </section><ErrorNote error={query.erro} />
+      <section className="commercial-kpis">
+        <article><CreditCard aria-hidden /><p>Receita recorrente contratada</p><strong>{brl(Math.round(monthly + annual / 12))} / mês</strong><small>{brl(monthly * 12 + annual)} anualizados em assinaturas ativas sincronizadas{unsynced ? ' · ' + unsynced + ' aguardando dados do plano' : ''}</small></article>
+        <article><Activity aria-hidden /><p>Comissões registradas no mês</p><strong>{brl(fees[0] + fees[1] - fees[2] - fees[3])}</strong><small>{approvedAppointments._count + approvedOrders._count} pagamentos e {refundedAppointments._count + refundedOrders._count} estornos · confira o saldo em Movimentações Stripe</small></article>
+      </section>
       {query.stripe === 'conectada' && <p role="status" className="success">Conexão com a Stripe confirmada.</p>}
       <article><h2>Configuração da Stripe</h2>
         {stripeSettings && <p>Ambiente configurado · {stripeSettings.mode === 'live' ? 'Produção' : 'Teste'}</p>}

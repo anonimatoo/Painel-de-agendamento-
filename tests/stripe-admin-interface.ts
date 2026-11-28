@@ -27,7 +27,7 @@ const dbUrl = new URL(process.env.DATABASE_URL ?? 'postgresql://invalid/invalid'
 
 async function main() {
   assert.equal(origin.hostname, '127.0.0.1')
-  assert.ok(['127.0.0.1', 'localhost'].includes(dbUrl.hostname) && dbUrl.pathname === '/cs_stripe_admin_test', 'Use o banco local dedicado cs_stripe_admin_test.')
+  assert.ok(['127.0.0.1', 'localhost'].includes(dbUrl.hostname) && /^\/cs_stripe_admin_test(?:_[a-z0-9]+)?$/.test(dbUrl.pathname), 'Use o banco local dedicado cs_stripe_admin_test.')
   assert.equal(await db.stripeSettings.count(), 0)
   assert.equal(await db.plan.count(), 0)
   assert.equal(await db.tenant.count(), 0)

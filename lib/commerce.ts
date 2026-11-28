@@ -39,15 +39,22 @@ export async function reverseSale(tenantId: string, id: string) {
   })
 }
 
-export async function cashReport(tenantId: string, zone: string) {
-  const start = DateTime.now().setZone(zone).startOf('month')
-  const period = { gte: start.toJSDate(), lt: start.plus({ months: 1 }).toJSDate() }
+export function cashPeriod(zone: string, from?: string, to?: string) {
+  const now = DateTime.now().setZone(zone)
+  const start = from ? DateTime.fromISO(from, { zone }) : now.startOf('month')
+  const finish = to ? DateTime.fromISO(to, { zone }) : now.endOf('month').startOf('day')
+  if (!start.isValid || !finish.isValid || start > finish || finish.diff(start, 'days').days > 92 ||
+      (from && start.toISODate() !== from) || (to && finish.toISODate() !== to)) return null
+  return { gte: start.toJSDate(), lt: finish.plus({ days: 1 }).toJSDate() }
+}
+
+export async function cashReport(tenantId: string, zone: string, period = cashPeriod(zone)!) {
   const [entries, movements, payments, refunds, orders, orderRefunds] = await Promise.all([
     db.financialEntry.findMany({ where: { tenantId, OR: [{ dueAt: period }, { paidAt: period }, { paidAt: null }] } }),
     db.stockMovement.findMany({ where: { tenantId, kind: { in: ['SALE', 'REVERSAL'] }, createdAt: period }, include: { product: { select: { name: true } } } }),
-    db.appointment.findMany({ where: { tenantId, paidAt: period }, select: { paidAt: true, chargeCents: true, cents: true } }),
+    db.appointment.findMany({ where: { tenantId, paidAt: period }, select: { paidAt: true, chargeCents: true, cents: true, checkoutMethod: true } }),
     db.appointment.findMany({ where: { tenantId, refundedAt: period }, select: { refundedAt: true, chargeCents: true, cents: true } }),
-    db.shopOrder.findMany({ where: { tenantId, paidAt: period }, select: { paidAt: true, cents: true } }),
+    db.shopOrder.findMany({ where: { tenantId, paidAt: period }, select: { paidAt: true, cents: true, checkoutMethod: true } }),
     db.shopOrder.findMany({ where: { tenantId, refundedAt: period }, select: { refundedAt: true, cents: true } })
   ])
   const rows = [
@@ -55,8 +62,8 @@ export async function cashReport(tenantId: string, zone: string) {
       .map(entry => ({ date: entry.paidAt!, title: entry.title, cents: entry.kind === 'INCOME' ? entry.cents : -entry.cents })),
     ...movements.map(movement => ({ date: movement.createdAt, title: (movement.kind === 'SALE' ? 'Venda presencial · ' : 'Estorno presencial · ') + movement.product.name, cents: -movement.quantity * movement.unitCents })),
     ...orderRefunds.map(order => ({ date: order.refundedAt!, title: 'Estorno de pedido online', cents: -order.cents })),
-    ...orders.map(order => ({ date: order.paidAt!, title: 'Pedido online', cents: order.cents })),
-    ...payments.map(payment => ({ date: payment.paidAt!, title: 'Pagamento de agendamento', cents: payment.chargeCents ?? payment.cents })),
+    ...orders.map(order => ({ date: order.paidAt!, title: 'Pedido online', method: order.checkoutMethod, cents: order.cents })),
+    ...payments.map(payment => ({ date: payment.paidAt!, title: 'Pagamento de agendamento', method: payment.checkoutMethod, cents: payment.chargeCents ?? payment.cents })),
     ...refunds.map(refund => ({ date: refund.refundedAt!, title: 'Estorno de agendamento', cents: -(refund.chargeCents ?? refund.cents) }))
   ].sort((first, second) => +second.date - +first.date)
   return { entries, rows }

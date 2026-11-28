@@ -1,3 +1,4 @@
+import { consumerPath } from '@/lib/consumer'
 import { startSession } from '@/lib/auth'
 import { finishSocial } from '@/lib/social-auth'
 import { isSocialProvider, socialOrigin } from '@/lib/social-oidc'
@@ -20,9 +21,9 @@ async function callback(req: Request, { params }: Context) {
         const result = await finishSocial(provider, state, code)
         if (result?.kind === 'login') {
           await startSession(result.userId, false, true)
-          next = '/dashboard'
+          next = result.consumerSlug ? consumerPath(result.consumerSlug) : '/dashboard'
         } else if (result?.kind === 'link') next = '/conta?social=vinculado'
-        else if (result?.kind === 'signup') next = '/cadastro/social'
+        else if (result?.kind === 'signup') next = result.consumerSlug ? consumerPath(result.consumerSlug) : '/cadastro/social'
       }
     }
   } catch {

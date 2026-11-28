@@ -31,12 +31,16 @@ const worker = new Worker('agenda-reminders', async job => {
   const { tenant } = appointment
   const followup = reminder.kind === 'BIRTHDAY' || reminder.kind === 'RETURN'
   if (!tenant.active || tenant.suspended || !tenant.whatsappInstance) return
-  const agreed = followup ? !!appointment.customer.followupConsentAt : appointment.consent
+  const merchant = reminder.kind === 'MERCHANT_CONFIRMED'
+  const manual = reminder.kind === 'MANUAL_REMINDER'
+  const agreed = merchant ? Boolean(reminder.recipientPhone && reminder.recipientPhone === tenant.merchantNoticePhone)
+    : followup ? !!appointment.customer.followupConsentAt : appointment.consent
   const reminderEligible = reminder.kind === 'REMINDER' && appointment.status === 'CONFIRMED' && appointment.startsAt > now &&
     reminderOffsets(tenant).some(offset => +reminder.runAt === +appointment.startsAt - offset * 60_000)
   const sameStart = reminder.scheduledStart && +reminder.scheduledStart === +appointment.startsAt
   const completion = reminder.kind === 'COMPLETED' || reminder.kind === 'FEEDBACK'
-  const statusEligible = reminder.kind !== 'REMINDER' && sameStart && (
+  const special = (manual || merchant) && sameStart && appointment.status === 'CONFIRMED' && appointment.startsAt > now
+  const statusEligible = !manual && !merchant && reminder.kind !== 'REMINDER' && sameStart && (
     completion ? tenant.completionMessages && appointment.status === 'COMPLETED' && (reminder.kind !== 'FEEDBACK' || Boolean(tenant.reviewUrl))
       : tenant.statusMessages && (
         reminder.kind === 'CANCELED' ? appointment.status === 'CANCELED'
@@ -52,17 +56,17 @@ const worker = new Worker('agenda-reminders', async job => {
       where: { tenantId: tenant.id, customerId: appointment.customerId, status: { in: ['COMPLETED','CONFIRMED','PENDING'] }, startsAt: { gt: appointment.startsAt } }
     })
   }
-  if (!agreed || (!reminderEligible && !statusEligible && !followupEligible)) {
+  if (!agreed || (!reminderEligible && !statusEligible && !followupEligible && !special)) {
     await db.reminder.updateMany({ where: { id: reminder.id, deliveryState: 'QUEUED' }, data: { deliveryState: 'CANCELED' } })
     return
   }
   const local = DateTime.fromJSDate(appointment.startsAt, { zone: tenant.timezone })
   const templates = tenant.whatsappTemplates as Record<string, string> | null
-  const kind = reminder.kind as keyof typeof messageTemplates
+  const kind = (manual ? 'REMINDER' : reminder.kind) as keyof typeof messageTemplates
   const base = new URL(process.env.APP_URL ?? 'http://localhost:3000').origin
   const url = base + '/estabelecimento/' + encodeURIComponent(tenant.slug)
   const template = templates?.[kind] || (kind === 'REMINDER' ? tenant.reminderTemplate : null) || messageTemplates[kind]
-  const message = renderMessage(template, {
+  const message = merchant ? `${tenant.name}: há um novo atendimento confirmado em ${local.toFormat('dd/LL/yyyy HH:mm')}. Consulte a agenda do estabelecimento.` : renderMessage(template, {
     cliente: appointment.customer.name, estabelecimento: tenant.name, servico: appointment.service.name,
     profissional: appointment.professional.name, data: local.toFormat('dd/LL/yyyy'), hora: local.toFormat('HH:mm'),
     horario: local.toFormat("dd/LL 'às' HH:mm"),
@@ -70,7 +74,7 @@ const worker = new Worker('agenda-reminders', async job => {
     pagamento: appointment.checkoutReturnUrl && appointment.paymentToken ? appointment.checkoutReturnUrl + '?pagamento=' + appointment.paymentToken : '',
     agendamento: url, avaliacao: tenant.reviewUrl ?? ''
   })
-  await deliverMessage(reminder.id, () => sendWhatsApp(tenant.whatsappInstance!, appointment.customer.phone, message), now)
+  await deliverMessage(reminder.id, () => sendWhatsApp(tenant.whatsappInstance!, merchant ? reminder.recipientPhone! : appointment.customer.phone, message), now)
 }, { connection })
 
 async function publishReminders() {
@@ -85,8 +89,8 @@ async function publishReminders() {
       sentAt: null, runAt: { gte: new Date(+now - 86_400_000), lte: now },
       appointment: { tenant: { active: true, suspended: false, whatsappInstance: { not: null } } },
       OR: [
-        { kind: 'REMINDER', appointment: { startsAt: { gt: now }, status: 'CONFIRMED' } },
-        { kind: { notIn: ['REMINDER', 'COMPLETED', 'FEEDBACK', 'BIRTHDAY', 'RETURN'] }, appointment: { tenant: { statusMessages: true } } },
+        { kind: { in: ['REMINDER', 'MANUAL_REMINDER', 'MERCHANT_CONFIRMED'] }, appointment: { startsAt: { gt: now }, status: 'CONFIRMED' } },
+        { kind: { notIn: ['REMINDER', 'MANUAL_REMINDER', 'MERCHANT_CONFIRMED', 'COMPLETED', 'FEEDBACK', 'BIRTHDAY', 'RETURN'] }, appointment: { tenant: { statusMessages: true } } },
         { kind: { in: ['COMPLETED', 'FEEDBACK'] }, appointment: { tenant: { completionMessages: true } } },
         { kind: { in: ['BIRTHDAY', 'RETURN'] } }
       ]

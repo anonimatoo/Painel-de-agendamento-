@@ -6,8 +6,9 @@ import { DateTime } from 'luxon'
 import { userSession, membership } from '@/lib/auth'
 import { cashReport } from '@/lib/commerce'
 import { db } from '@/lib/db'
+import { MerchantShell } from '../merchant-shell'
 import { commerce } from '../actions'
-import { Brand, brl, ErrorNote, Field } from '../ui'
+import { brl, ErrorNote, Field } from '../ui'
 
 export default async function CommercePage({ searchParams }: { searchParams: Promise<{ erro?: string }> }) {
   const user = await userSession()
@@ -29,7 +30,7 @@ export default async function CommercePage({ searchParams }: { searchParams: Pro
   const negative = rows.reduce((sum, row) => sum - Math.min(0, row.cents), 0)
   const outstanding = entries.filter(entry => !entry.paidAt)
   const date = (value: Date) => DateTime.fromJSDate(value, { zone }).toFormat('dd/LL/yyyy')
-  return <div className="site"><header><Brand /><Link href="/dashboard">Voltar ao painel</Link></header><main className="content">
+  return <MerchantShell member={member} current="/comercial">
     <h1>Estoque e financeiro</h1>{member.role === 'ADMIN' && <Link href="/comissoes">Comissões profissionais</Link>}<ErrorNote error={query.erro} />
     {finance && <><section className="grid metrics">
       <article><p>Entradas no mês</p><strong>{brl(positive)}</strong></article>
@@ -55,7 +56,7 @@ export default async function CommercePage({ searchParams }: { searchParams: Pro
     <article><h2>Fluxo de caixa do mês</h2>{can(member, 'report.export') && <div className="inline"><a href="/api/financeiro/csv" className="button outline">Baixar CSV</a><a href="/api/financeiro/xlsx" className="button outline">Baixar XLSX</a></div>}
       {rows.length ? <ul>{rows.map((row, index) => <li key={index}>{date(row.date)} · {row.title} · {brl(row.cents)}</li>)}</ul> : <p>Nenhuma movimentação liquidada neste mês.</p>}
     </article>
-    </>}{stock && <article><h2>Produtos e estoque</h2>
+    </>}{stock && <article id="estoque"><h2>Produtos e estoque</h2><div id="vendas" />
       {!products.length && <p>Cadastre os produtos na seção Equipe e catálogo do painel.</p>}
       {products.map(product => <details key={product.id}>
         <summary>{product.name} · {product.stock} em estoque{product.stock <= product.minimumStock ? ' · Estoque baixo' : ''}</summary>
@@ -77,7 +78,7 @@ export default async function CommercePage({ searchParams }: { searchParams: Pro
         </form>}
       </details>)}
     </article>
-    }{finance && <article><h2>Pedidos para retirada</h2>{orders.length ? <ul>{orders.map(order => <li key={order.id}>
+    }{finance && <article id="pedidos"><h2>Pedidos para retirada</h2>{orders.length ? <ul>{orders.map(order => <li key={order.id}>
       {date(order.createdAt)} · {order.customerName} · +{order.phone} · {brl(order.cents)} ·
       {' '}{order.paymentReview ? 'Em verificação' : order.status === 'PAID' ? 'Pago' : order.status === 'PENDING' ? 'Aguardando pagamento' : order.status === 'REFUNDED' ? 'Estornado' : 'Cancelado'}
       {order.status === 'PENDING' && <form action={commerce.bind(null, 'review-order')}><input name="id" type="hidden" value={order.id} /><button className="outline">Consultar pagamento</button></form>}
@@ -95,5 +96,5 @@ export default async function CommercePage({ searchParams }: { searchParams: Pro
       </li>)}</ul> : <p>Nenhuma movimentação de estoque.</p>}
     </article>
     }
-  </main></div>
+  </MerchantShell>
 }

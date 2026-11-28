@@ -12,6 +12,11 @@ enum Role {
   FINANCE
   READONLY
 }
+enum CheckoutMethod {
+  card
+  pix
+}
+
 enum Status {
   PENDING
   CONFIRMED
@@ -34,6 +39,7 @@ model User {
   accountTokens AccountToken[]
   sessions Session[]
   memberships Member[]
+  consumerProfiles ConsumerProfile[]
   createdAt DateTime @default(now())
 }
 model Session {
@@ -57,6 +63,8 @@ model Tenant {
   contactPhone String?
   policies String @default("")
   theme String @default("light")
+  publicDesign Json?
+  publicDesignDraft Json?
   media MediaAsset[]
   timezone String @default("America/Sao_Paulo")
   active Boolean @default(false)
@@ -72,10 +80,12 @@ model Tenant {
   connectAttemptScope String?
   connectPausedAt DateTime?
   onlinePayment Boolean @default(false)
+  pixCheckoutEnabled Boolean @default(false)
   depositPercent Int @default(100)
   platformFeeBps Int?
   platformFeeFixed Int?
   whatsappInstance String? @unique
+  merchantNoticePhone String?
   reminderTemplate String?
   statusMessages Boolean @default(false)
   reminderPresets Int[] @default([])
@@ -91,7 +101,10 @@ model Tenant {
   services Service[]
   professionals Professional[]
   customers Customer[]
+  consumerProfiles ConsumerProfile[]
+  consumerNoticeHours Int?
   products Product[]
+  catalogCategories CatalogCategory[]
   financialEntries FinancialEntry[]
   orders ShopOrder[]
   appointments Appointment[]
@@ -119,6 +132,8 @@ model Service {
   tenant Tenant @relation(fields: [tenantId], references: [id])
   name String
   description String @default("")
+  category String @default("")
+  archivedAt DateTime?
   cents Int
   duration Int
   active Boolean @default(true)
@@ -181,6 +196,13 @@ model Product {
   tenant Tenant @relation(fields: [tenantId], references: [id])
   name String
   category String @default("")
+  description String @default("")
+  sku String?
+  published Boolean @default(true)
+  archivedAt DateTime?
+  variantOfId String?
+  variantOf Product? @relation("ProductVariants", fields: [tenantId, variantOfId], references: [tenantId, id], onDelete: Restrict)
+  variants Product[] @relation("ProductVariants")
   cents Int
   costCents Int @default(0)
   promotionCents Int?
@@ -189,7 +211,16 @@ model Product {
   movements StockMovement[]
   orderItems ShopOrderItem[]
   @@index([tenantId])
+  @@index([tenantId, variantOfId])
   @@unique([tenantId, id])
+  @@unique([tenantId, sku])
+}
+
+model CatalogCategory {
+  tenantId String
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name String
+  @@id([tenantId, name])
 }
 
 enum MovementKind {
@@ -240,6 +271,8 @@ model Appointment {
   serviceId String
   professionalId String
   customerId String
+  consumerUserId String?
+  consumer ConsumerProfile? @relation(fields: [tenantId, consumerUserId], references: [tenantId, userId], onDelete: Restrict)
   service Service @relation(fields: [tenantId, serviceId], references: [tenantId, id])
   professional Professional @relation(fields: [tenantId, professionalId], references: [tenantId, id])
   customer Customer @relation(fields: [tenantId, customerId], references: [tenantId, id])
@@ -251,6 +284,7 @@ model Appointment {
   chargeCents Int?
   platformFeeCents Int @default(0)
   commission ProfessionalCommission?
+  checkoutMethod CheckoutMethod @default(card)
   paymentIntentId String? @unique
   refundedAt DateTime?
   consent Boolean @default(false)
@@ -264,6 +298,7 @@ model Appointment {
   history AppointmentHistory[]
   createdAt DateTime @default(now())
   @@index([tenantId, startsAt])
+  @@index([tenantId, consumerUserId, startsAt])
 }
 model Plan {
   id String @id @default(cuid())
@@ -286,6 +321,8 @@ model Subscription {
   planId String
   plan Plan @relation(fields: [planId], references: [id])
   status String
+  recurringCents Int?
+  recurringInterval String?
   updatedAt DateTime @updatedAt
   @@index([tenantId, status])
 }
@@ -308,6 +345,7 @@ model Reminder {
   deliveryAttempts Int @default(0)
   retryAt DateTime?
   providerMessageId String?
+  recipientPhone String?
   dedupeKey String? @unique
   @@unique([appointmentId, runAt, kind])
   @@index([sentAt, runAt])
@@ -446,11 +484,14 @@ model ShopOrder {
   requestId String
   customerName String
   phone String
+  consumerUserId String?
+  consumer ConsumerProfile? @relation(fields: [tenantId, consumerUserId], references: [tenantId, userId], onDelete: Restrict)
   cents Int
   platformFeeCents Int @default(0)
   status OrderStatus @default(PENDING)
   paymentReview Boolean @default(false)
   checkoutId String? @unique
+  checkoutMethod CheckoutMethod @default(card)
   paymentIntentId String? @unique
   expiresAt DateTime
   paidAt DateTime?
@@ -460,6 +501,7 @@ model ShopOrder {
   @@unique([tenantId, requestId])
   @@unique([tenantId, id])
   @@index([status, expiresAt])
+  @@index([tenantId, consumerUserId, createdAt])
 }
 
 model ShopOrderItem {
@@ -610,4 +652,18 @@ model SocialAttempt {
   encrypted String
   expiresAt DateTime
   @@index([expiresAt])
+}
+
+model ConsumerProfile {
+  tenantId String
+  userId String
+  name String
+  phone String
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  appointments Appointment[]
+  orders ShopOrder[]
+
+  @@id([tenantId, userId])
+  @@index([userId])
 }

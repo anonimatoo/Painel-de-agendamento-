@@ -1,0 +1,35 @@
+.identity{display:inline-flex;align-items:center;gap:.65rem;text-decoration:none;font-weight:850;letter-spacing:-.04em;font-size:1.25rem;color:#331268}
+.brandMark{display:grid;place-items:center;background:linear-gradient(145deg,#9b5cff,#5413bc);border-radius:11px;width:39px;height:39px;color:white;box-shadow:0 6px 12px #6b32ae35}
+.brandMark svg{width:24px;height:24px}
+.authPage{min-height:100vh;background:radial-gradient(ellipse at 0 40%,#e6d4ff,transparent 48%),radial-gradient(ellipse at 98% 90%,#ecdcff,transparent 45%),#faf7ff}
+.authHeader,.authFooter{padding:1rem clamp(1.1rem,6vw,6rem)}
+.authHeader>a:last-child,.authFooter a,.authBottom a,.authReset{font-weight:650;color:#5e22ae}
+.authLayout{width:min(100% - 2rem,1030px);margin:clamp(1.5rem,5vw,5rem) auto;display:grid;grid-template-columns:.9fr 1fr;gap:clamp(1rem,6vw,6rem);align-items:center}
+.authIntro h2{font-size:clamp(1.9rem,4.4vw,3.6rem);max-width:12ch;color:#211039;letter-spacing:-.055em}
+.authIntro p{max-width:37ch}
+.back{display:inline-flex;align-items:center;gap:.4rem;color:#552190;font-weight:700}
+.authIllustration{position:relative;height:160px;max-width:235px;margin:1.3rem 0;background:radial-gradient(ellipse,#dfc6ff 0,transparent 70%)}
+.authCalendar{position:absolute;left:49px;top:20px;display:grid;place-items:center;width:112px;height:112px;border-radius:27px;background:linear-gradient(145deg,#bc85ff,#5924cc);box-shadow:0 17px 35px #5421ac38;transform:rotate(-10deg);color:#fff}
+.authCalendar svg{width:66px;height:66px}
+.authMiniIcon{position:absolute;display:grid;place-items:center;width:45px;height:45px;border:1px solid #e0c5fa;border-radius:14px;background:#fff;color:#7532d0;box-shadow:0 10px 25px #5421ac27}
+.authMiniIcon:nth-child(2){right:15px;top:30px;transform:rotate(11deg)}
+.authMiniIcon:last-child{left:26px;bottom:10px}
+.authCard{border-radius:22px;padding:clamp(1.2rem,4vw,2.2rem);border-top:6px solid #6323ba;box-shadow:0 20px 56px #3114571c}
+.authCard h1{font-size:clamp(1.9rem,4vw,2.65rem)}
+.authForm{gap:.52rem}.authForm label{margin-top:.2rem}
+.input{display:flex;align-items:center;gap:.5rem;border:1px solid #d8cbe8;border-radius:10px;padding-left:.6rem;background:#fff}
+.input>svg{color:#6b2abc;flex-shrink:0;width:19px}.input input{border:0;background:transparent;padding:.65rem .35rem}
+.passwordToggle{background:transparent;color:#52337a;padding:.45rem;display:grid;place-items:center}
+.passwordToggle svg{color:inherit}
+.fieldError{color:#a12c46;margin:0;font-size:.88rem}
+.fieldHint,.verifiedEmail{font-size:.9rem;margin:0;color:#584473}
+.passwordProgress{display:flex;gap:.3rem}.passwordProgress span{height:5px;flex:1;border-radius:5px;background:#e9deef}.passwordProgress span[data-active=true]{background:#5d9d5c}
+.slugPreview{display:flex;align-items:center;gap:.6rem;background:#f4eafa;border-radius:10px;padding:.7rem;overflow-wrap:anywhere;font-size:.88rem}.slugPreview svg{flex-shrink:0}
+.authSubmit{display:flex;align-items:center;justify-content:center;gap:.5rem;width:100%;background:linear-gradient(135deg,#853bdd,#5413a2);margin-top:.3rem}.authSubmit svg{color:white}
+.authReset{display:block;text-align:center;margin:1rem 0}
+.authSocial{border-top:1px solid #eee5f5;margin-top:1rem}.authSocial form button{width:100%}.authSocial form{margin:0}
+.divider{text-align:center;margin-top:.7rem}
+.authBottom{display:flex;flex-wrap:wrap;gap:.45rem 1rem;font-size:.92rem}.authBottom p{margin:0}
+.authFooter{display:flex;flex-wrap:wrap;gap:1rem;justify-content:center;border-top:1px solid #e9dff3;font-size:.91rem}
+.adminDetails{margin-top:.4rem}
+@media(max-width:720px){.authLayout{grid-template-columns:1fr;max-width:480px}.authIntro{display:none}.authHeader{min-height:64px}}

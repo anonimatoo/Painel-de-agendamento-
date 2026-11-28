@@ -1,18 +1,24 @@
 import Link from 'next/link'
 import { enabledSocialProviders } from '@/lib/social-auth'
+import { AuthShell } from '../auth-shell'
 import { SocialButtons } from '../social-buttons'
-import { Brand, ErrorNote } from '../ui'
+import { ErrorNote } from '../ui'
 import { RegisterForm } from './register-form'
+import styles from '../public-experience.module.css'
 
 export default async function Register({ searchParams }: { searchParams: Promise<{ erro?: string }> }) {
   const [query, providers] = await Promise.all([searchParams, enabledSocialProviders()])
-  return <div className="site"><header><Brand /></header><main className="center auth-center"><article>
+  return <AuthShell mode="register">
     <h1>Criar conta</h1>
-    <p>Crie a agenda do seu estabelecimento. O endereço da sua página é gerado automaticamente.</p>
+    <p>Prepare a agenda do seu estabelecimento em poucos passos.</p>
     <ErrorNote error={query.erro} />
-    <SocialButtons providers={providers} />
-    {providers.length > 0 && <p className="auth-divider">ou cadastre-se com e-mail</p>}
     <RegisterForm />
-    <p><Link href="/login">Já tenho conta</Link></p>
-  </article></main></div>
+    {providers.length > 0 && <div className={styles.authSocial}>
+      <p className={styles.divider}>ou cadastre-se com</p><SocialButtons providers={providers} />
+    </div>}
+    <div className={styles.authBottom}>
+      <p>Já tem conta? <Link href="/login">Entrar</Link></p>
+      <Link href="/ajuda#clientes">Quero agendar como cliente</Link>
+    </div>
+  </AuthShell>
 }

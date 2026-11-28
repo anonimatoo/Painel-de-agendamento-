@@ -1,11 +1,12 @@
-import type { Prisma, ShopOrder } from '@prisma/client'
+import type { CheckoutMethod, Prisma, ShopOrder } from '@prisma/client'
 import type Stripe from 'stripe'
+import { failedCheckout, pixMinimumCents } from './checkout-method'
 import { AgendaError } from './agenda'
 import { platformFee } from './commission'
 import { db } from './db'
 
-export async function reserveOrder(input: { tenantId: string; requestId: string; name: string; phone: string; cart: { productId: string; quantity: number }[] }) {
-  const { tenantId, requestId, name, phone, cart } = input
+export async function reserveOrder(input: { tenantId: string; requestId: string; checkoutMethod?: CheckoutMethod; consumerUserId?: string; name: string; phone: string; cart: { productId: string; quantity: number }[] }) {
+  const { tenantId, requestId, checkoutMethod = 'card', consumerUserId, name, phone, cart } = input
   const requested = new Map(cart.map(item => [item.productId, item.quantity]))
   if (!cart.length || requested.size !== cart.length || cart.length > 30 || cart.some(item => !Number.isInteger(item.quantity) || item.quantity < 1 || item.quantity > 100)) {
     throw new AgendaError('Confira as quantidades do carrinho.')
@@ -14,28 +15,29 @@ export async function reserveOrder(input: { tenantId: string; requestId: string;
     await tx.$queryRaw`SELECT id FROM "Tenant" WHERE id = ${tenantId} FOR UPDATE`
     const existing = await tx.shopOrder.findUnique({ where: { tenantId_requestId: { tenantId, requestId } }, include: { items: true } })
     if (existing) {
-      if (existing.phone !== phone || existing.customerName !== name || existing.items.length !== requested.size ||
+      if (existing.checkoutMethod !== checkoutMethod || existing.consumerUserId !== (consumerUserId ?? null) || existing.phone !== phone || existing.customerName !== name || existing.items.length !== requested.size ||
         existing.items.some(item => requested.get(item.productId) !== item.quantity)) throw new AgendaError('Atualize a página antes de iniciar um novo pedido.')
       return existing
     }
-    const tenant = await tx.tenant.findUniqueOrThrow({ where: { id: tenantId }, select: { connectPausedAt: true } })
-    if (tenant.connectPausedAt) throw new AgendaError('Os pagamentos online estão indisponíveis.')
+    const tenant = await tx.tenant.findUniqueOrThrow({ where: { id: tenantId }, select: { connectPausedAt: true, pixCheckoutEnabled: true } })
+    if (tenant.connectPausedAt || (checkoutMethod === 'pix' && !tenant.pixCheckoutEnabled)) throw new AgendaError('Os pagamentos online estão indisponíveis.')
     const items = []
     for (const line of [...cart].sort((first, second) => first.productId.localeCompare(second.productId))) {
       const { productId, quantity } = line
       await tx.$queryRaw`SELECT id FROM "Product" WHERE id = ${productId} AND "tenantId" = ${tenantId} FOR UPDATE`
       const product = await tx.product.findUnique({ where: { tenantId_id: { tenantId, id: productId } } })
-      if (!product || product.stock < quantity || (product.promotionCents ?? product.cents) < 1) {
+      if (!product || !product.published || product.archivedAt || product.stock < quantity || (product.promotionCents ?? product.cents) < 1) {
         throw new AgendaError('Um item do carrinho ficou indisponível. Atualize a página e confira as quantidades.')
       }
       await tx.product.update({ where: { tenantId_id: { tenantId, id: productId } }, data: { stock: { decrement: quantity } } })
       items.push({ tenantId, productId, quantity, name: product.name, unitCents: product.promotionCents ?? product.cents })
     }
     const cents = items.reduce((sum, item) => sum + item.quantity * item.unitCents, 0)
+    if (checkoutMethod === 'pix' && cents < pixMinimumCents) throw new AgendaError('O total para Pix deve ser de pelo menos R$ 0,50.')
     if (cents > 9_999_999) throw new AgendaError('O total excede o limite de um pedido.')
     return tx.shopOrder.create({
       data: {
-        tenantId, requestId, cents, platformFeeCents: await platformFee(tx, tenantId, cents), customerName: name, phone,
+        tenantId, requestId, checkoutMethod, consumerUserId, cents, platformFeeCents: await platformFee(tx, tenantId, cents), customerName: name, phone,
         expiresAt: new Date(Math.floor(Date.now() / 1000) * 1000 + 35 * 60_000),
         items: { createMany: { data: items.map(({ tenantId: _tenantId, ...item }) => item) } }
       }, include: { items: true }
@@ -83,10 +85,11 @@ export async function reconcileOrder(order: ShopOrder, account: string, api: Str
       if (candidate.metadata?.orderId === order.id) { session = candidate; break }
     }
   }
-  if (session && (session.payment_status === 'paid' || session.status === 'expired')) {
+  const failed = session ? await failedCheckout(session, order.checkoutMethod, api, account) : false
+  if (session && (session.payment_status === 'paid' || failed)) {
     const evidence = session
-    await db.$transaction(tx => settleOrder(tx, account, evidence, evidence.status === 'expired'))
-  } else if (Date.now() >= +order.expiresAt) {
+    await db.$transaction(tx => settleOrder(tx, account, evidence, failed))
+  } else if (!(session?.status === 'complete' && order.checkoutMethod === 'pix' && Date.now() < +order.expiresAt + 300_000) && Date.now() >= +order.expiresAt) {
     await db.shopOrder.updateMany({ where: { id: order.id, status: 'PENDING' }, data: { paymentReview: true } })
   }
 }
